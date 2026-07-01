@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geort"
+version = "0.1.0"
+description = "GeoRT: Geometry-aware Robot Teleoperation"
+requires-python = ">=3.12"
+dependencies = [
+    # Deep learning
+    "torch",
+    "torchvision",
+    "torchaudio",
+    # Scientific computing
+    "numpy",
+    "scipy",
+    # Simulation (SAPIEN 3, compatible with Python 3.12)
+    "sapien>=3.0.0",
+    # Reinforcement learning
+    "gymnasium",          # gym is deprecated; gymnasium is the maintained fork
+    # Utilities
+    "tqdm",
+    "open3d",
+    "trimesh",
+    "pyzmq",              # zmq Python package is named pyzmq on PyPI
+    "hand-tracking-sdk>=1.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pyright",
+]
+
+[tool.uv]
+# Use uv's fast resolver; lock file is generated via `uv lock`
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pyright",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["geort*"]

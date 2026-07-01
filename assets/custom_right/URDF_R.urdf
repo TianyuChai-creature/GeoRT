@@ -1,0 +1,691 @@
+<?xml version="1.0"?>
+<robot name="URDF_0605_R">
+
+  <link name="base_link" />
+
+    <link name="HOUSING-R">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/HOUSING-R.STL" />
+        </geometry>
+        <material name="black_material">
+          <color rgba="0.14000000 0.15000000 0.16000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.1837865 -0.0862771 -0.0016055" rpy="0 0 0" />
+        <mass value="0.5561357" />
+        <inertia ixx="0.0010606" ixy="0.0000006" ixz="0" iyy="0.0004326" iyz="-0.0000165" izz="0.0012833" />
+      </inertial>
+    </link>
+
+    <link name="WRIST-PALM-R">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/WRIST-PALM-R.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0000026 0.0098149 -0.0002516" rpy="0 0 0" />
+        <mass value="0.0356289" />
+        <inertia ixx="0.0000063" ixy="0" ixz="0" iyy="0.0000075" iyz="0" izz="0.0000061" />
+      </inertial>
+    </link>
+
+    <link name="PALM-R">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/PALM-R.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.0146895 0.0384383 -0.0020085" rpy="0 0 0" />
+        <mass value="0.1364399" />
+        <inertia ixx="0.0000619" ixy="-0.0000115" ixz="0.0000014" iyy="0.0000437" iyz="0.0000038" izz="0.0000993" />
+      </inertial>
+    </link>
+
+    <link name="F1-R-MCP2">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F1-R-MCP2.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.0051493 0.0066497 0.003465" rpy="0 0 0" />
+        <mass value="0.0034154" />
+        <inertia ixx="0.0000001" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000002" />
+      </inertial>
+    </link>
+
+    <link name="F1-R-MCP1">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F1-R-MCP1.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.0117416 0.0168702 0.0016672" rpy="0 0 0" />
+        <mass value="0.022955" />
+        <inertia ixx="0.0000022" ixy="-0.0000007" ixz="-0.0000003" iyy="0.0000021" iyz="-0.0000003" izz="0.0000023" />
+      </inertial>
+    </link>
+
+    <link name="F1-R-PIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F1-R-PIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F1-R-PIP-marker">
+        <origin xyz="0 0 -0.005" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="pip_marker_blue">
+          <color rgba="0.00000000 0.35000000 1.00000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.0101665 0.011579 0.0018089" rpy="0 0 0" />
+        <mass value="0.010446" />
+        <inertia ixx="0.0000007" ixy="-0.0000002" ixz="-0.0000001" iyy="0.0000006" iyz="-0.0000001" izz="0.0000007" />
+      </inertial>
+    </link>
+
+    <link name="F1-R-DIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F1-R-DIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F1-R-TIP-marker">
+        <origin xyz="0.018 0.018 0.006" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="tip_marker_red">
+          <color rgba="1.00000000 0.05000000 0.05000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.009624 0.0095618 0.0010277" rpy="0 0 0" />
+        <mass value="0.0078009" />
+        <inertia ixx="0.0000004" ixy="-0.0000001" ixz="0" iyy="0.0000004" iyz="0" izz="0.0000004" />
+      </inertial>
+    </link>
+
+    <link name="F2-R-MCP2">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F2-R-MCP2.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0 0.0032303 -0.0059951" rpy="0 0 0" />
+        <mass value="0.0025219" />
+        <inertia ixx="0.0000002" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000001" />
+      </inertial>
+    </link>
+
+    <link name="F2-R-MCP1">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F2-R-MCP1.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0028991 0.0177237 -0.0006809" rpy="0 0 0" />
+        <mass value="0.0145304" />
+        <inertia ixx="0.0000022" ixy="0" ixz="0" iyy="0.0000005" iyz="0.0000001" izz="0.0000024" />
+      </inertial>
+    </link>
+
+    <link name="F2-R-PIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F2-R-PIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F2-R-PIP-marker">
+        <origin xyz="-0.003 0 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="pip_marker_blue">
+          <color rgba="0.00000000 0.35000000 1.00000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0028992 0.0111292 -0.000448" rpy="0 0 0" />
+        <mass value="0.0050184" />
+        <inertia ixx="0.0000003" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000003" />
+      </inertial>
+    </link>
+
+    <link name="F2-R-DIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F2-R-DIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F2-R-TIP-marker">
+        <origin xyz="-0.0055 0.018 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="tip_marker_red">
+          <color rgba="1.00000000 0.05000000 0.05000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0054993 0.0103728 -0.0010699" rpy="0 0 0" />
+        <mass value="0.0036931" />
+        <inertia ixx="0.0000001" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000002" />
+      </inertial>
+    </link>
+
+    <link name="F3-R-MCP2">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F3-R-MCP2.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0 0.0032303 -0.0059951" rpy="0 0 0" />
+        <mass value="0.0025219" />
+        <inertia ixx="0.0000002" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000001" />
+      </inertial>
+    </link>
+
+    <link name="F3-R-MCP1">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F3-R-MCP1.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0028991 0.0177237 -0.0006809" rpy="0 0 0" />
+        <mass value="0.0145304" />
+        <inertia ixx="0.0000022" ixy="0" ixz="0" iyy="0.0000005" iyz="0.0000001" izz="0.0000024" />
+      </inertial>
+    </link>
+
+    <link name="F3-R-PIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F3-R-PIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F3-R-PIP-marker">
+        <origin xyz="-0.006 0 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="pip_marker_blue">
+          <color rgba="0.00000000 0.35000000 1.00000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0060992 0.0111292 -0.000448" rpy="0 0 0" />
+        <mass value="0.0050184" />
+        <inertia ixx="0.0000003" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000003" />
+      </inertial>
+    </link>
+
+    <link name="F3-R-DIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F3-R-DIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F3-R-TIP-marker">
+        <origin xyz="-0.0055 0.018 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="tip_marker_red">
+          <color rgba="1.00000000 0.05000000 0.05000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0054993 0.0103728 -0.001045" rpy="0 0 0" />
+        <mass value="0.0036931" />
+        <inertia ixx="0.0000001" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000002" />
+      </inertial>
+    </link>
+
+    <link name="F4-R-MCP2">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F4-R-MCP2.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0 0.0032303 -0.0059951" rpy="0 0 0" />
+        <mass value="0.0025219" />
+        <inertia ixx="0.0000002" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000001" />
+      </inertial>
+    </link>
+
+    <link name="F4-R-MCP1">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F4-R-MCP1.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0028991 0.0177237 -0.0006809" rpy="0 0 0" />
+        <mass value="0.0145304" />
+        <inertia ixx="0.0000022" ixy="0" ixz="0" iyy="0.0000005" iyz="0.0000001" izz="0.0000024" />
+      </inertial>
+    </link>
+
+    <link name="F4-R-PIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F4-R-PIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F4-R-PIP-marker">
+        <origin xyz="-0.006 0 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="pip_marker_blue">
+          <color rgba="0.00000000 0.35000000 1.00000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0060992 0.0111292 -0.000448" rpy="0 0 0" />
+        <mass value="0.0050184" />
+        <inertia ixx="0.0000003" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000003" />
+      </inertial>
+    </link>
+
+    <link name="F4-R-DIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F4-R-DIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F4-R-TIP-marker">
+        <origin xyz="-0.0055 0.018 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="tip_marker_red">
+          <color rgba="1.00000000 0.05000000 0.05000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0054993 0.0103728 -0.001045" rpy="0 0 0" />
+        <mass value="0.0036931" />
+        <inertia ixx="0.0000001" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000002" />
+      </inertial>
+    </link>
+
+    <link name="F5-R-MCP2">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F5-R-MCP2.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0 0.0032303 -0.0059951" rpy="0 0 0" />
+        <mass value="0.0025219" />
+        <inertia ixx="0.0000002" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000001" />
+      </inertial>
+    </link>
+
+    <link name="F5-R-MCP1">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F5-R-MCP1.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="0.0029009 0.0177237 -0.0006809" rpy="0 0 0" />
+        <mass value="0.0145304" />
+        <inertia ixx="0.0000022" ixy="0" ixz="0" iyy="0.0000005" iyz="0.0000001" izz="0.0000024" />
+      </inertial>
+    </link>
+
+    <link name="F5-R-PIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F5-R-PIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F5-R-PIP-marker">
+        <origin xyz="-0.006 0 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="pip_marker_blue">
+          <color rgba="0.00000000 0.35000000 1.00000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0060992 0.0111292 -0.000448" rpy="0 0 0" />
+        <mass value="0.0050184" />
+        <inertia ixx="0.0000003" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000003" />
+      </inertial>
+    </link>
+
+    <link name="F5-R-DIP">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="meshes/visual/F5-R-DIP.STL" />
+        </geometry>
+        <material name="dark_gray_material">
+          <color rgba="0.42000000 0.44000000 0.46000000 1.00000000"/>
+        </material>
+      </visual>
+      <visual name="F5-R-TIP-marker">
+        <origin xyz="-0.0055 0.018 0" rpy="0 0 0" />
+        <geometry>
+          <sphere radius="0.004" />
+        </geometry>
+        <material name="tip_marker_red">
+          <color rgba="1.00000000 0.05000000 0.05000000 1.00000000"/>
+        </material>
+      </visual>
+      <inertial>
+        <origin xyz="-0.0055016 0.0103744 -0.0010705" rpy="0 0 0" />
+        <mass value="0.0036931" />
+        <inertia ixx="0.0000001" ixy="0" ixz="0" iyy="0.0000001" iyz="0" izz="0.0000002" />
+      </inertial>
+    </link>
+
+  <joint name="base_link_to_HOUSING-R" type="fixed">
+    <parent link="base_link" />
+    <child link="HOUSING-R" />
+    <origin xyz="0.18 0 0" rpy="1.57079632679 0 3.14159265359" />
+  </joint>
+
+  <joint name="WRIST-PALM-R" type="revolute">
+    <parent link="HOUSING-R" />
+    <child link="WRIST-PALM-R" />
+    <origin xyz="0.1838 -0.00041 -0.00127" rpy="0 0 0" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.785" upper="0.785" effort="12.0" velocity="2.0" />
+    <dynamics damping="0.3000" friction="0.2400" />
+  </joint>
+
+  <joint name="PALM-R" type="revolute">
+    <parent link="WRIST-PALM-R" />
+    <child link="PALM-R" />
+    <origin xyz="-0.019318 0.030212 -0.0003385" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-1.22" upper="1.22" effort="10.0" velocity="2.5" />
+    <dynamics damping="0.2000" friction="0.2000" />
+  </joint>
+
+  <joint name="F1-R-MCP2" type="revolute">
+    <parent link="PALM-R" />
+    <child link="F1-R-MCP2" />
+    <origin xyz="0.0416107 0.0193912 0.0035" rpy="0 0 0" />
+    <axis xyz="0.7660444 -0.6427876 0" />
+    <limit lower="-0.35" upper="0.61" effort="6.5" velocity="2.82" />
+    <dynamics damping="0.1152" friction="0.1300" />
+  </joint>
+
+  <joint name="F1-R-MCP1" type="revolute">
+    <parent link="F1-R-MCP2" />
+    <child link="F1-R-MCP1" />
+    <origin xyz="0.0050544 0.0068014 0.0101617" rpy="0 0 0" />
+    <axis xyz="-0.2450208 -0.2920044 0.9244989" />
+    <limit lower="-0.52" upper="0.785" effort="6.0" velocity="3.84" />
+    <dynamics damping="0.0781" friction="0.1200" />
+  </joint>
+
+  <joint name="F1-R-PIP" type="revolute">
+    <parent link="F1-R-MCP1" />
+    <child link="F1-R-PIP" />
+    <origin xyz="0.0250873 0.0300535 0.0139239" rpy="0 0 0" />
+    <axis xyz="-0.2450208 -0.2920044 0.9244989" />
+    <limit lower="-0.35" upper="1.31" effort="3.5" velocity="4.88" />
+    <dynamics damping="0.0359" friction="0.0700" />
+  </joint>
+
+  <joint name="F1-R-DIP" type="revolute">
+    <parent link="F1-R-PIP" />
+    <child link="F1-R-DIP" />
+    <origin xyz="0.0178277 0.0212462 0.0114355" rpy="0 0 0" />
+    <axis xyz="-0.2450208 -0.2920044 0.9244989" />
+    <limit lower="-0.35" upper="1.31" effort="1.7" velocity="4.88" />
+    <dynamics damping="0.0174" friction="0.0340" />
+  </joint>
+
+  <joint name="F2-R-MCP2" type="revolute">
+    <parent link="PALM-R" />
+    <child link="F2-R-MCP2" />
+    <origin xyz="0.0475313 0.0778613 0.0023" rpy="0 0 0" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.024546" upper="0.349248" effort="6.0" velocity="3.59" />
+    <dynamics damping="0.0836" friction="0.1200" />
+  </joint>
+
+  <joint name="F2-R-MCP1" type="revolute">
+    <parent link="F2-R-MCP2" />
+    <child link="F2-R-MCP1" />
+    <origin xyz="0.0029 0.01 -0.0056" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.52" upper="1.57" effort="5.5" velocity="6.15" />
+    <dynamics damping="0.0447" friction="0.1100" />
+  </joint>
+
+  <joint name="F2-R-PIP" type="revolute">
+    <parent link="F2-R-MCP1" />
+    <child link="F2-R-PIP" />
+    <origin xyz="0 0.043109 -0.0016488" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.92" effort="3.0" velocity="5.65" />
+    <dynamics damping="0.0265" friction="0.0600" />
+  </joint>
+
+  <joint name="F2-R-DIP" type="revolute">
+    <parent link="F2-R-PIP" />
+    <child link="F2-R-DIP" />
+    <origin xyz="0.0026 0.023 0.0001" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.22" effort="1.5" velocity="3.59" />
+    <dynamics damping="0.0209" friction="0.0300" />
+  </joint>
+
+  <joint name="F3-R-MCP2" type="revolute">
+    <parent link="PALM-R" />
+    <child link="F3-R-MCP2" />
+    <origin xyz="0.0279652 0.0831041 0.0023" rpy="0 0 0" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.125311" upper="0.183063" effort="6.0" velocity="3.59" />
+    <dynamics damping="0.0836" friction="0.1200" />
+  </joint>
+
+  <joint name="F3-R-MCP1" type="revolute">
+    <parent link="F3-R-MCP2" />
+    <child link="F3-R-MCP1" />
+    <origin xyz="0.0029 0.01 -0.0056" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.52" upper="1.57" effort="5.5" velocity="6.15" />
+    <dynamics damping="0.0447" friction="0.1100" />
+  </joint>
+
+  <joint name="F3-R-PIP" type="revolute">
+    <parent link="F3-R-MCP1" />
+    <child link="F3-R-PIP" />
+    <origin xyz="0.0032 0.043109 -0.0016488" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.92" effort="3.0" velocity="5.65" />
+    <dynamics damping="0.0265" friction="0.0600" />
+  </joint>
+
+  <joint name="F3-R-DIP" type="revolute">
+    <parent link="F3-R-PIP" />
+    <child link="F3-R-DIP" />
+    <origin xyz="-0.0006 0.023 0" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.22" effort="1.5" velocity="3.59" />
+    <dynamics damping="0.0209" friction="0.0300" />
+  </joint>
+
+  <joint name="F4-R-MCP2" type="revolute">
+    <parent link="PALM-R" />
+    <child link="F4-R-MCP2" />
+    <origin xyz="0.008399 0.0778613 0.0023" rpy="0 0 0" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.134074" upper="0.065926" effort="6.0" velocity="3.59" />
+    <dynamics damping="0.0836" friction="0.1200" />
+  </joint>
+
+  <joint name="F4-R-MCP1" type="revolute">
+    <parent link="F4-R-MCP2" />
+    <child link="F4-R-MCP1" />
+    <origin xyz="0.0029 0.01 -0.0056" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.52" upper="1.57" effort="5.5" velocity="6.15" />
+    <dynamics damping="0.0447" friction="0.1100" />
+  </joint>
+
+  <joint name="F4-R-PIP" type="revolute">
+    <parent link="F4-R-MCP1" />
+    <child link="F4-R-PIP" />
+    <origin xyz="0.0032 0.043109 -0.0016488" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.92" effort="3.0" velocity="5.65" />
+    <dynamics damping="0.0265" friction="0.0600" />
+  </joint>
+
+  <joint name="F4-R-DIP" type="revolute">
+    <parent link="F4-R-PIP" />
+    <child link="F4-R-DIP" />
+    <origin xyz="-0.0006 0.023 0" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.22" effort="1.5" velocity="3.59" />
+    <dynamics damping="0.0209" friction="0.0300" />
+  </joint>
+
+  <joint name="F5-R-MCP2" type="revolute">
+    <parent link="PALM-R" />
+    <child link="F5-R-MCP2" />
+    <origin xyz="-0.0111988 0.0632092 0.0023" rpy="0 0 0" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.30" upper="0.35" effort="6.0" velocity="3.59" />
+    <dynamics damping="0.0836" friction="0.1200" />
+  </joint>
+
+  <joint name="F5-R-MCP1" type="revolute">
+    <parent link="F5-R-MCP2" />
+    <child link="F5-R-MCP1" />
+    <origin xyz="-0.0029 0.01 -0.0056" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.52" upper="1.57" effort="5.5" velocity="6.15" />
+    <dynamics damping="0.0447" friction="0.1100" />
+  </joint>
+
+  <joint name="F5-R-PIP" type="revolute">
+    <parent link="F5-R-MCP1" />
+    <child link="F5-R-PIP" />
+    <origin xyz="0.009 0.043109 -0.0016488" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.92" effort="3.0" velocity="5.65" />
+    <dynamics damping="0.0265" friction="0.0600" />
+  </joint>
+
+  <joint name="F5-R-DIP" type="revolute">
+    <parent link="F5-R-PIP" />
+    <child link="F5-R-DIP" />
+    <origin xyz="-0.0005906 0.022994 0.0001022" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.22" effort="1.5" velocity="3.59" />
+    <dynamics damping="0.0209" friction="0.0300" />
+  </joint>
+
+</robot>

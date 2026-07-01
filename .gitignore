@@ -1,0 +1,47 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# Virtual environments
+/.venv/
+/.venv-*/
+/venv/
+/env/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Local editor and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Runtime outputs and logs
+outputs/
+*.log
+# Generated datasets, model caches, and checkpoints
+/data/*
+/checkpoint/
+/datasets/*/processed/
+/datasets/*/reports/
+*.pth
+*.pt
+*.npy
+*.npz
+
+# Raw training datasets kept in the repository
+!/data/
+!/data/README.md
+!/data/human_alex.npy
+!/data/hts_right.npy
+!/data/hts_left.npy
+
+# Local binary model assets downloaded for experiments
+*.task
