@@ -21,6 +21,7 @@ from geort.env.hand import HandKinematicModel
 from geort.loss import chamfer_distance
 from geort.formatter import HandFormatter
 from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointDataset
+from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
 from datetime import datetime
 from tqdm import tqdm 
 import os
@@ -152,19 +153,30 @@ class GeoRTTrainer:
         self.config = config
         self.hand = HandKinematicModel.build_from_config(self.config)
 
-    def get_robot_pointcloud(self, keypoint_names):
+    def get_robot_pointcloud(self, keypoint_names, chamfer_target="uniform", chamfer_target_path=None):
         '''
             Utility getter function. Return the robot fingertip point cloud.
         '''
-        kinematics_dataset = self.get_robot_kinematics_dataset()
+        kinematics_dataset = self.get_robot_kinematics_dataset(
+            chamfer_target=chamfer_target,
+            chamfer_target_path=chamfer_target_path,
+        )
         return kinematics_dataset.export_robot_pointcloud(keypoint_names)
         
-    def get_robot_kinematics_dataset(self):
+    def get_robot_kinematics_dataset(self, chamfer_target="uniform", chamfer_target_path=None):
         '''
-            Utility getter function. Return the robot kinematics dataset
+            Utility getter function. Return the robot kinematics dataset.
+
+            FK training always calls this with the default uniform target. IK
+            chamfer can request a prebuilt human-shaped target cloud.
         '''
-        dataset_path = self.get_robot_kinematics_dataset_path(postfix=True)
-        if not os.path.exists(dataset_path):
+        target = resolve_chamfer_target_path(
+            hand_name=self.config["name"],
+            chamfer_target=chamfer_target,
+            explicit_path=chamfer_target_path,
+        )
+        dataset_path = target.path.as_posix()
+        if chamfer_target == "uniform" and not os.path.exists(dataset_path):
             dataset = self.generate_robot_kinematics_dataset(n_total=100000, save=True)
             dataset_path = self.get_robot_kinematics_dataset_path(postfix=True)
         
@@ -305,6 +317,9 @@ class GeoRTTrainer:
         w_segment_direction = kwargs.get("w_segment_direction", 0.5)
         save_every = int(kwargs.get("save_every", 0) or 0)
         update_latest = bool(kwargs.get("update_latest", True))
+        chamfer_target = kwargs.get("chamfer_target", "uniform")
+        chamfer_target_path = kwargs.get("chamfer_target_path", None)
+        mold_path = kwargs.get("mold_path", None)
 
         save_dir = f"./checkpoint/{hand_model_name}_{generate_current_timestring()}"
         if exp_tag != '':
@@ -328,11 +343,55 @@ class GeoRTTrainer:
         if update_latest:
             save_json(export_config, Path(last_save_dir) / "config.json")
 
+        resolved_chamfer_target = resolve_chamfer_target_path(
+            hand_name=hand_model_name,
+            chamfer_target=chamfer_target,
+            explicit_path=chamfer_target_path,
+        )
         # Dataset.
         robot_keypoint_names = keypoint_info['link']
         n_keypoints = len(robot_keypoint_names)
 
-        robot_points = self.get_robot_pointcloud(robot_keypoint_names)
+        effective_chamfer_target_path = (
+            resolved_chamfer_target.path
+            if chamfer_target != "uniform" or chamfer_target_path is not None
+            else None
+        )
+        robot_points = self.get_robot_pointcloud(
+            robot_keypoint_names,
+            chamfer_target=chamfer_target,
+            chamfer_target_path=effective_chamfer_target_path,
+        )
+        metadata_target_path = (
+            resolved_chamfer_target.path
+            if effective_chamfer_target_path is not None
+            else Path(self.get_robot_kinematics_dataset_path(postfix=True))
+        )
+        training_metadata = build_training_metadata(
+            chamfer_target=chamfer_target,
+            target_path=metadata_target_path,
+            mold_path=mold_path,
+            human_data_path=human_data_path,
+            n_epoch=n_epoch,
+            loss_weights={
+                "w_chamfer": w_chamfer,
+                "w_curvature": w_curvature,
+                "w_collision": w_collision,
+                "w_pinch": w_pinch,
+                "w_segment_direction": w_segment_direction,
+            },
+            cli_args={
+                "tag": exp_tag,
+                "chamfer_target": chamfer_target,
+                "chamfer_target_path": str(chamfer_target_path) if chamfer_target_path else None,
+                "mold_path": str(mold_path) if mold_path else None,
+                "save_every": save_every,
+                "update_latest": update_latest,
+            },
+        )
+        save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
+        if update_latest:
+            save_training_metadata(Path(last_save_dir) / "training_metadata.json", training_metadata)
 
         human_finger_idxes = keypoint_info["human_id"]
         keypoint_weights = torch.tensor(keypoint_info["weight"], dtype=torch.float32).cuda()
@@ -470,6 +529,9 @@ if __name__ == '__main__':
     parser.add_argument('--pinch_threshold', type=float, default=0.015)
     parser.add_argument('--w_segment_direction', type=float, default=0.5)
     parser.add_argument('--save_every', type=int, default=0, help='Save epoch_N.pth every N epochs; 0 keeps only last.pth.')
+    parser.add_argument('--chamfer_target', choices=('uniform', 'human'), default='uniform', help='Chamfer target cloud source.')
+    parser.add_argument('--chamfer_target_path', default=None, help='Explicit chamfer target .npz path. Human defaults to data/<hand>_humanshaped.npz.')
+    parser.add_argument('--mold_path', default=None, help='Optional mold.json path to record in checkpoint metadata.')
     parser.add_argument('--no_update_latest', action='store_true', help='Do not update checkpoint/<hand>_last.')
 
     args = parser.parse_args()
@@ -490,4 +552,7 @@ if __name__ == '__main__':
         pinch_threshold=args.pinch_threshold,
         w_segment_direction=args.w_segment_direction,
         save_every=args.save_every,
+        chamfer_target=args.chamfer_target,
+        chamfer_target_path=args.chamfer_target_path,
+        mold_path=args.mold_path,
         update_latest=not args.no_update_latest)
