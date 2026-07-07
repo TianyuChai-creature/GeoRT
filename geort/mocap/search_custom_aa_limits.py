@@ -32,8 +32,14 @@ def aa_joint_names_for_hand(hand: str) -> list[str]:
     return [f"{finger}-{side}-MCP2" for finger in AA_FINGER_NAMES]
 
 
-def reference_aa_limits_for_joints(joint_names: list[str]) -> dict[str, tuple[float, float]]:
-    return {joint_name: REFERENCE_AA_LIMIT for joint_name in joint_names}
+def reference_aa_limits_for_joints(
+    joint_names: list[str],
+    reference_limit: tuple[float, float] = REFERENCE_AA_LIMIT,
+) -> dict[str, tuple[float, float]]:
+    lower, upper = reference_limit
+    return {joint_name: (float(lower), float(upper)) for joint_name in joint_names}
+
+
 ADJACENT_PAIR_NAMES = ["index__middle", "middle__ring", "ring__pinky"]
 OPPOSITION_PAIR_NAMES = ["thumb__index", "thumb__middle", "thumb__ring", "thumb__pinky"]
 OPTIMIZED_PAIR_NAMES = ADJACENT_PAIR_NAMES
@@ -46,6 +52,12 @@ def _round_pair(pair: tuple[float, float]) -> list[float]:
 
 def _round_limit_dict(limits: dict[str, tuple[float, float]]) -> dict[str, list[float]]:
     return {name: _round_pair(limit) for name, limit in limits.items()}
+
+
+def _search_reference_aa_limit(reference_lower: float, reference_upper: float, min_width: float) -> tuple[float, float]:
+    reference = (float(reference_lower), float(reference_upper))
+    _limit_bounds(*reference, min_width)
+    return reference
 
 
 def build_limit_comparison(
@@ -101,7 +113,7 @@ def _validate_candidate(candidate: dict[str, tuple[float, float]], reference_lim
 
 
 def generate_aa_limit_candidates(
-    current_limits: dict[str, tuple[float, float]],
+    reference_limits: dict[str, tuple[float, float]],
     *,
     num_candidates: int,
     min_width: float,
@@ -116,8 +128,8 @@ def generate_aa_limit_candidates(
     candidates = []
     for _ in range(num_candidates):
         candidate = {}
-        for joint_name, (current_lower, current_upper) in current_limits.items():
-            lower_min, lower_max, upper_min, upper_max = _limit_bounds(current_lower, current_upper, min_width)
+        for joint_name, (reference_lower, reference_upper) in reference_limits.items():
+            lower_min, lower_max, upper_min, upper_max = _limit_bounds(reference_lower, reference_upper, min_width)
             for _attempt in range(100):
                 lower = float(rng.uniform(lower_min, lower_max))
                 upper = float(rng.uniform(upper_min, upper_max))
@@ -125,7 +137,7 @@ def generate_aa_limit_candidates(
                     candidate[joint_name] = (lower, upper)
                     break
             else:
-                candidate[joint_name] = _repair_limit_pair(lower_min, upper_min, (current_lower, current_upper), min_width)
+                candidate[joint_name] = _repair_limit_pair(lower_min, upper_min, (reference_lower, reference_upper), min_width)
         candidates.append(candidate)
     return candidates
 
@@ -340,6 +352,41 @@ def _opposition_reach_report(
     }
 
 
+def _adjacent_reach_report(
+    urdf_tips: dict[str, np.ndarray],
+    *,
+    pair_names: list[str],
+    contact_threshold: float,
+    p_norm: float,
+) -> dict:
+    pair_metrics = {}
+    violations = []
+    threshold = float(contact_threshold)
+    scale = max(threshold, 1e-9)
+    for pair_name in pair_names:
+        finger_a, finger_b = _split_pair_name(pair_name)
+        min_distance = _min_reachable_distance(
+            urdf_tips.get(finger_a, np.empty((0, 3), dtype=np.float32)),
+            urdf_tips.get(finger_b, np.empty((0, 3), dtype=np.float32)),
+        )
+        violation = max(0.0, min_distance - threshold) / scale
+        pair_metrics[pair_name] = {
+            "min_distance": min_distance,
+            "contact_threshold": threshold,
+            "violation": violation,
+            "passes": bool(violation == 0.0),
+        }
+        violations.append(violation)
+    worst_pair = max(pair_metrics, key=lambda pair: pair_metrics[pair]["violation"]) if pair_metrics else None
+    return {
+        "pair_metrics": pair_metrics,
+        "penalty": _p_norm(violations, p_norm),
+        "mean_violation": float(np.mean(violations)) if violations else 0.0,
+        "max_violation": float(pair_metrics[worst_pair]["violation"]) if worst_pair else 0.0,
+        "worst_pair": worst_pair,
+    }
+
+
 def score_limit_candidate(
     *,
     dataset_overlap: dict[str, dict[str, float]],
@@ -354,6 +401,8 @@ def score_limit_candidate(
     p_norm: float = 6.0,
     contact_threshold: float = 0.015,
     reach_penalty_weight: float = 10.0,
+    adjacent_contact_threshold: float = 0.02,
+    adjacent_reach_penalty_weight: float = 10.0,
     regularization_weight: float = 0.02,
 ) -> dict:
     adjacent = _adjacent_iou_hinge_report(
@@ -362,6 +411,12 @@ def score_limit_candidate(
         pair_names=adjacent_pair_names,
         iou_tolerance=iou_tolerance,
         iou_floor=iou_floor,
+        p_norm=p_norm,
+    )
+    adjacent_reach = _adjacent_reach_report(
+        urdf_tips,
+        pair_names=adjacent_pair_names,
+        contact_threshold=adjacent_contact_threshold,
         p_norm=p_norm,
     )
     opposition = _opposition_reach_report(
@@ -373,20 +428,28 @@ def score_limit_candidate(
     regularization = {"value": 0.0, "per_joint": {}, "reference_limits": {}}
     if candidate_limits is not None and reference_limits is not None:
         regularization = compute_limit_regularization(candidate_limits, reference_limits)
-    score = adjacent["p_norm_error"] + float(reach_penalty_weight) * opposition["penalty"] + float(regularization_weight) * regularization["value"]
+    score = (
+        adjacent["p_norm_error"]
+        + float(adjacent_reach_penalty_weight) * adjacent_reach["penalty"]
+        + float(reach_penalty_weight) * opposition["penalty"]
+        + float(regularization_weight) * regularization["value"]
+    )
     return {
         "score": float(score),
         "loss": float(score),
         "adjacent": adjacent,
+        "adjacent_reach": adjacent_reach,
         "opposition": opposition,
         "regularization": regularization,
         "weights": {
             "reach_penalty_weight": float(reach_penalty_weight),
+            "adjacent_reach_penalty_weight": float(adjacent_reach_penalty_weight),
             "regularization_weight": float(regularization_weight),
             "p_norm": float(p_norm),
             "iou_tolerance": float(iou_tolerance),
             "iou_floor": float(iou_floor),
             "contact_threshold": float(contact_threshold),
+            "adjacent_contact_threshold": float(adjacent_contact_threshold),
         },
     }
 
@@ -406,6 +469,7 @@ def score_overlap_candidate(
         adjacent_pair_names=pair_names,
         opposition_pair_names=[],
         reach_penalty_weight=0.0,
+        adjacent_reach_penalty_weight=0.0,
         regularization_weight=0.0,
     )
     return float(score["score"])
@@ -480,6 +544,8 @@ def evaluate_candidate(
     p_norm: float,
     contact_threshold: float,
     reach_penalty_weight: float,
+    adjacent_contact_threshold: float,
+    adjacent_reach_penalty_weight: float,
     regularization_weight: float,
     candidate_source: str,
     parent_candidate: int | None = None,
@@ -506,6 +572,8 @@ def evaluate_candidate(
         p_norm=p_norm,
         contact_threshold=contact_threshold,
         reach_penalty_weight=reach_penalty_weight,
+        adjacent_contact_threshold=adjacent_contact_threshold,
+        adjacent_reach_penalty_weight=adjacent_reach_penalty_weight,
         regularization_weight=regularization_weight,
     )
     candidate_info = {"source": candidate_source}
@@ -527,6 +595,7 @@ def evaluate_candidate(
             }
             for pair_name in adjacent_pair_names
         },
+        "adjacent_reach_constraints": score_report["adjacent_reach"],
         "opposition_constraints": score_report["opposition"],
     }
 
@@ -551,11 +620,13 @@ def compute_limit_sensitivity(results: list[dict]) -> dict:
     sensitivity = {}
     metric_getters = {
         "adjacent_iou_error": lambda result, pair: result["score_report"]["adjacent"]["pair_metrics"].get(pair, {}).get("relative_error"),
+        "adjacent_reach_violation": lambda result, pair: result["score_report"]["adjacent_reach"]["pair_metrics"].get(pair, {}).get("violation"),
         "opposition_reach_violation": lambda result, pair: result["score_report"]["opposition"]["pair_metrics"].get(pair, {}).get("violation"),
     }
     all_pairs = set()
     for result in results:
         all_pairs.update(result["score_report"]["adjacent"]["pair_metrics"])
+        all_pairs.update(result["score_report"]["adjacent_reach"]["pair_metrics"])
         all_pairs.update(result["score_report"]["opposition"]["pair_metrics"])
     for pair_name in sorted(all_pairs):
         pair_report = {}
@@ -604,6 +675,8 @@ def _evaluate_candidate_specs(
     p_norm: float,
     contact_threshold: float,
     reach_penalty_weight: float,
+    adjacent_contact_threshold: float,
+    adjacent_reach_penalty_weight: float,
     regularization_weight: float,
 ) -> list[dict]:
     results = []
@@ -627,6 +700,8 @@ def _evaluate_candidate_specs(
             p_norm=p_norm,
             contact_threshold=contact_threshold,
             reach_penalty_weight=reach_penalty_weight,
+            adjacent_contact_threshold=adjacent_contact_threshold,
+            adjacent_reach_penalty_weight=adjacent_reach_penalty_weight,
             regularization_weight=regularization_weight,
             candidate_source=spec["source"],
             parent_candidate=spec.get("parent_candidate"),
@@ -635,10 +710,12 @@ def _evaluate_candidate_specs(
         result["candidate_index"] = global_idx
         results.append(result)
         adjacent = result["score_report"]["adjacent"]
+        adjacent_reach = result["score_report"]["adjacent_reach"]
         opposition = result["score_report"]["opposition"]
         print(
             f"candidate {global_idx + 1}: loss={result['loss']:.6f} "
-            f"source={spec['source']} adjacent={adjacent['p_norm_error']:.6f} opposition={opposition['penalty']:.6f}"
+            f"source={spec['source']} adjacent={adjacent['p_norm_error']:.6f} "
+            f"adjacent_reach={adjacent_reach['penalty']:.6f} opposition={opposition['penalty']:.6f}"
         )
     return results
 
@@ -664,7 +741,11 @@ def search_aa_limits(
     p_norm: float = 6.0,
     contact_threshold: float = 0.015,
     reach_penalty_weight: float = 10.0,
+    adjacent_contact_threshold: float = 0.02,
+    adjacent_reach_penalty_weight: float = 10.0,
     regularization_weight: float = 0.02,
+    reference_lower: float = REFERENCE_AA_LIMIT[0],
+    reference_upper: float = REFERENCE_AA_LIMIT[1],
 ) -> dict:
     config = get_config(hand)
     keypoint_info = parse_config_keypoint_info(config)
@@ -674,7 +755,8 @@ def search_aa_limits(
     hand_model.initialize_keypoint(keypoint_link_names=keypoint_info["link"], keypoint_offsets=keypoint_info["offset"])
     aa_joint_names = aa_joint_names_for_hand(hand)
     current_limits = _current_aa_limits_from_hand(hand_model, aa_joint_names)
-    reference_limits = reference_aa_limits_for_joints(aa_joint_names)
+    search_reference_limit = _search_reference_aa_limit(reference_lower, reference_upper, min_width)
+    reference_limits = reference_aa_limits_for_joints(aa_joint_names, search_reference_limit)
     dataset_overlap = build_workspace_overlap_report(dataset_tips, dataset_tips, voxel_size=overlap_voxel_size)
     adjacent_pair_names = [pair for pair in ADJACENT_PAIR_NAMES if pair in dataset_overlap["dataset"]]
     opposition_pair_names = [pair for pair in OPPOSITION_PAIR_NAMES if pair in dataset_overlap["dataset"]]
@@ -708,6 +790,8 @@ def search_aa_limits(
         p_norm=p_norm,
         contact_threshold=contact_threshold,
         reach_penalty_weight=reach_penalty_weight,
+        adjacent_contact_threshold=adjacent_contact_threshold,
+        adjacent_reach_penalty_weight=adjacent_reach_penalty_weight,
         regularization_weight=regularization_weight,
     )
 
@@ -745,6 +829,8 @@ def search_aa_limits(
                 p_norm=p_norm,
                 contact_threshold=contact_threshold,
                 reach_penalty_weight=reach_penalty_weight,
+                adjacent_contact_threshold=adjacent_contact_threshold,
+                adjacent_reach_penalty_weight=adjacent_reach_penalty_weight,
                 regularization_weight=regularization_weight,
             )
             all_results.extend(refined_results)
@@ -756,8 +842,11 @@ def search_aa_limits(
         "human_data": human_data,
         "optimized_joints": aa_joint_names,
         "reference_limits": _round_limit_dict(reference_limits),
+        "search_reference_limit": _round_pair(search_reference_limit),
+        "search_reference_source": "original_mcp2_limit_cli_not_current_urdf",
         "current_urdf_limits": _round_limit_dict(current_limits),
         "adjacent_iou_pairs": adjacent_pair_names,
+        "adjacent_reach_pairs": adjacent_pair_names,
         "opposition_reach_pairs": opposition_pair_names,
         "num_candidates": int(num_candidates),
         "total_evaluated_candidates": int(len(all_results)),
@@ -772,16 +861,20 @@ def search_aa_limits(
             "refine_samples_per_parent": int(refine_samples_per_parent),
             "refine_step": float(refine_step),
             "refine_step_decay": float(refine_step_decay),
+            "candidate_limit_baseline": "reference_limits",
         },
         "scoring": {
             "space": "tip_xyz_only",
             "adjacent_objective": "one_sided_voxel_iou_hinge",
+            "adjacent_reach_constraint": "min_adjacent_tip_distance_threshold",
             "opposition_constraint": "min_tip_distance_threshold",
             "iou_tolerance": float(iou_tolerance),
             "iou_floor": float(iou_floor),
             "p_norm": float(p_norm),
             "contact_threshold": float(contact_threshold),
+            "adjacent_contact_threshold": float(adjacent_contact_threshold),
             "reach_penalty_weight": float(reach_penalty_weight),
+            "adjacent_reach_penalty_weight": float(adjacent_reach_penalty_weight),
             "regularization_weight": float(regularization_weight),
         },
         "limit_sensitivity": sensitivity,
@@ -823,7 +916,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--p_norm", type=float, default=6.0)
     parser.add_argument("--contact_threshold", type=float, default=0.015)
     parser.add_argument("--reach_penalty_weight", type=float, default=10.0)
+    parser.add_argument("--adjacent_contact_threshold", type=float, default=0.02)
+    parser.add_argument("--adjacent_reach_penalty_weight", type=float, default=10.0)
     parser.add_argument("--regularization_weight", type=float, default=0.02)
+    parser.add_argument("--reference_lower", type=float, default=REFERENCE_AA_LIMIT[0])
+    parser.add_argument("--reference_upper", type=float, default=REFERENCE_AA_LIMIT[1])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", default="outputs/visualizations/custom_right_aa_limit_search.json")
     return parser
@@ -851,7 +948,11 @@ def main() -> None:
         p_norm=args.p_norm,
         contact_threshold=args.contact_threshold,
         reach_penalty_weight=args.reach_penalty_weight,
+        adjacent_contact_threshold=args.adjacent_contact_threshold,
+        adjacent_reach_penalty_weight=args.adjacent_reach_penalty_weight,
         regularization_weight=args.regularization_weight,
+        reference_lower=args.reference_lower,
+        reference_upper=args.reference_upper,
     )
     output = save_search_report(report, _resolve_output(args.output))
     print(f"AA limit search report saved to {output}")
@@ -861,6 +962,7 @@ def main() -> None:
             f"rank {rank}: loss={candidate['loss']:.6f} source_candidate={candidate['candidate_index']} "
             f"source={candidate['candidate_info']['source']} "
             f"worst_adjacent={score_report['adjacent']['worst_pair']} "
+            f"worst_adjacent_reach={score_report['adjacent_reach']['worst_pair']} "
             f"worst_opposition={score_report['opposition']['worst_pair']}"
         )
         for joint_name, comparison in candidate["limit_comparison"].items():
