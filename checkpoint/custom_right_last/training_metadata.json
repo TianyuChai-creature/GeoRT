@@ -2,18 +2,18 @@
   "chamfer_target": "human",
   "cli_args": {
     "chamfer_target": "human",
-    "chamfer_target_path": "data/custom_right_humanshaped_mcp1boost_a06.npz",
+    "chamfer_target_path": "data/custom_right_humanshaped_anchor_v4_mcp1boost_a06.npz",
     "mcp1_fist_prior_dip_weight": 0.7,
     "mcp1_fist_prior_mcp_weight": 2.0,
     "mcp1_fist_prior_pip_weight": 1.0,
     "mcp1_fist_prior_target_alpha": 0.5,
     "mcp1_fist_prior_top_fraction": 0.08,
-    "mold_path": "data/custom_right_humanshaped_mcp1boost_a06_debug/mold.json",
+    "mold_path": "data/custom_right_humanshaped_anchor_v4_mcp1boost_a06_debug/mold.json",
     "save_every": 0,
-    "tag": "mcp1prior_w1_a05_full",
+    "tag": "anchor_v4_mcp1prior_w1_a05_full",
     "update_latest": true
   },
-  "human_data_path": "/home/creature/Desktop/GeoRT/data/hts_right_20260703_quest3_v3_train.npy",
+  "human_data_path": "/home/creature/Desktop/GeoRT/data/hts_right_20260703_quest3_v3.npy",
   "loss_weights": {
     "w_chamfer": 80.0,
     "w_collision": 0.0,
@@ -23,12 +23,12 @@
     "w_segment_direction": 0.5
   },
   "mold": {
-    "path": "data/custom_right_humanshaped_mcp1boost_a06_debug/mold.json",
-    "sha256": "114451a112e361583d5ff61787c70f0e6bbf91bc5e25ab93ef65fc7d55e08050"
+    "path": "data/custom_right_humanshaped_anchor_v4_mcp1boost_a06_debug/mold.json",
+    "sha256": "6c3a0735f69caa0941a5284edc13f3a4f4bfa373e07eaeb85e61346d5e2d0ae2"
   },
   "n_epoch": 200,
   "target_cloud": {
-    "path": "data/custom_right_humanshaped_mcp1boost_a06.npz",
-    "sha256": "884f12d635f8defcc78389e15458b482b648b079fdc5d574442ee943246f2e07"
+    "path": "data/custom_right_humanshaped_anchor_v4_mcp1boost_a06.npz",
+    "sha256": "313e1d35a0d768d191e21f95730eb28aa8f6cc6911e0c588584bfdb5ecee34b2"
   }
 }

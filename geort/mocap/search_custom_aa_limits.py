@@ -17,8 +17,23 @@ from geort.mocap.visualize_tip_workspace import (
 from geort.utils.config_utils import get_config, parse_config_keypoint_info
 from geort.utils.path import get_human_data, to_package_root
 
-AA_JOINT_NAMES = ["F2-R-MCP2", "F3-R-MCP2", "F4-R-MCP2", "F5-R-MCP2"]
-REFERENCE_AA_LIMITS = {joint_name: (-0.30, 0.35) for joint_name in AA_JOINT_NAMES}
+AA_FINGER_NAMES = ("F2", "F3", "F4", "F5")
+REFERENCE_AA_LIMIT = (-0.30, 0.35)
+
+
+def aa_joint_names_for_hand(hand: str) -> list[str]:
+    hand_name = hand.lower()
+    if "left" in hand_name:
+        side = "L"
+    elif "right" in hand_name:
+        side = "R"
+    else:
+        raise ValueError(f"Cannot infer hand side from {hand!r}; expected name containing left or right")
+    return [f"{finger}-{side}-MCP2" for finger in AA_FINGER_NAMES]
+
+
+def reference_aa_limits_for_joints(joint_names: list[str]) -> dict[str, tuple[float, float]]:
+    return {joint_name: REFERENCE_AA_LIMIT for joint_name in joint_names}
 ADJACENT_PAIR_NAMES = ["index__middle", "middle__ring", "ring__pinky"]
 OPPOSITION_PAIR_NAMES = ["thumb__index", "thumb__middle", "thumb__ring", "thumb__pinky"]
 OPTIMIZED_PAIR_NAMES = ADJACENT_PAIR_NAMES
@@ -115,18 +130,18 @@ def generate_aa_limit_candidates(
     return candidates
 
 
-def _candidate_to_vector(candidate: dict[str, tuple[float, float]]) -> np.ndarray:
+def _candidate_to_vector(candidate: dict[str, tuple[float, float]], joint_names: list[str]) -> np.ndarray:
     values = []
-    for joint_name in AA_JOINT_NAMES:
+    for joint_name in joint_names:
         lower, upper = candidate[joint_name]
         values.extend([lower, upper])
     return np.asarray(values, dtype=np.float64)
 
 
-def _vector_to_candidate(vector: np.ndarray, reference_limits: dict[str, tuple[float, float]], min_width: float) -> dict[str, tuple[float, float]]:
+def _vector_to_candidate(vector: np.ndarray, reference_limits: dict[str, tuple[float, float]], min_width: float, joint_names: list[str]) -> dict[str, tuple[float, float]]:
     candidate = {}
     idx = 0
-    for joint_name in AA_JOINT_NAMES:
+    for joint_name in joint_names:
         lower = float(vector[idx])
         upper = float(vector[idx + 1])
         idx += 2
@@ -138,6 +153,7 @@ def _vector_to_candidate(vector: np.ndarray, reference_limits: dict[str, tuple[f
 def generate_lhs_aa_limit_candidates(
     reference_limits: dict[str, tuple[float, float]],
     *,
+    joint_names: list[str],
     num_candidates: int,
     min_width: float,
     seed: int,
@@ -145,7 +161,7 @@ def generate_lhs_aa_limit_candidates(
     if num_candidates <= 0:
         raise ValueError("num_candidates must be positive")
     rng = np.random.default_rng(seed)
-    dimensions = len(AA_JOINT_NAMES) * 2
+    dimensions = len(joint_names) * 2
     unit = np.empty((num_candidates, dimensions), dtype=np.float64)
     for dim in range(dimensions):
         strata = (np.arange(num_candidates, dtype=np.float64) + rng.random(num_candidates)) / num_candidates
@@ -156,7 +172,7 @@ def generate_lhs_aa_limit_candidates(
     for row_idx, row in enumerate(unit):
         candidate = {}
         dim = 0
-        for joint_name in AA_JOINT_NAMES:
+        for joint_name in joint_names:
             lower_min, lower_max, upper_min, upper_max = _limit_bounds(*reference_limits[joint_name], min_width)
             lower = lower_min + row[dim] * (lower_max - lower_min)
             upper = upper_min + row[dim + 1] * (upper_max - upper_min)
@@ -177,6 +193,7 @@ def generate_refined_aa_limit_candidates(
     parent_results: list[dict],
     reference_limits: dict[str, tuple[float, float]],
     *,
+    joint_names: list[str],
     num_samples_per_parent: int,
     min_width: float,
     step_size: float,
@@ -189,10 +206,10 @@ def generate_refined_aa_limit_candidates(
     refined = []
     for parent in parent_results:
         parent_limits = _limits_from_result(parent)
-        parent_vector = _candidate_to_vector(parent_limits)
+        parent_vector = _candidate_to_vector(parent_limits, joint_names)
         for sample_idx in range(num_samples_per_parent):
             delta = rng.normal(loc=0.0, scale=step_size, size=parent_vector.shape)
-            candidate = _vector_to_candidate(parent_vector + delta, reference_limits, min_width)
+            candidate = _vector_to_candidate(parent_vector + delta, reference_limits, min_width, joint_names)
             refined.append(
                 {
                     "limits": candidate,
@@ -394,13 +411,13 @@ def score_overlap_candidate(
     return float(score["score"])
 
 
-def _current_aa_limits_from_hand(hand: HandKinematicModel) -> dict[str, tuple[float, float]]:
+def _current_aa_limits_from_hand(hand: HandKinematicModel, joint_names: list[str]) -> dict[str, tuple[float, float]]:
     return {
         joint_name: (
             float(hand.joint_lower_limit[hand.joint_names.index(joint_name)]),
             float(hand.joint_upper_limit[hand.joint_names.index(joint_name)]),
         )
-        for joint_name in AA_JOINT_NAMES
+        for joint_name in joint_names
     }
 
 
@@ -655,8 +672,9 @@ def search_aa_limits(
     dataset_tips = extract_dataset_tip_points(frames, keypoint_info)
     hand_model = HandKinematicModel.build_from_config(config, render=False)
     hand_model.initialize_keypoint(keypoint_link_names=keypoint_info["link"], keypoint_offsets=keypoint_info["offset"])
-    current_limits = _current_aa_limits_from_hand(hand_model)
-    reference_limits = {name: tuple(limit) for name, limit in REFERENCE_AA_LIMITS.items()}
+    aa_joint_names = aa_joint_names_for_hand(hand)
+    current_limits = _current_aa_limits_from_hand(hand_model, aa_joint_names)
+    reference_limits = reference_aa_limits_for_joints(aa_joint_names)
     dataset_overlap = build_workspace_overlap_report(dataset_tips, dataset_tips, voxel_size=overlap_voxel_size)
     adjacent_pair_names = [pair for pair in ADJACENT_PAIR_NAMES if pair in dataset_overlap["dataset"]]
     opposition_pair_names = [pair for pair in OPPOSITION_PAIR_NAMES if pair in dataset_overlap["dataset"]]
@@ -667,7 +685,7 @@ def search_aa_limits(
             "coarse_random",
         )
     elif search_mode in {"lhs", "coarse_to_fine"}:
-        candidate_specs = generate_lhs_aa_limit_candidates(reference_limits, num_candidates=num_candidates, min_width=min_width, seed=seed)
+        candidate_specs = generate_lhs_aa_limit_candidates(reference_limits, joint_names=aa_joint_names, num_candidates=num_candidates, min_width=min_width, seed=seed)
     else:
         raise ValueError(f"Unsupported search_mode={search_mode!r}")
 
@@ -701,6 +719,7 @@ def search_aa_limits(
             refined_specs = generate_refined_aa_limit_candidates(
                 parents,
                 reference_limits,
+                joint_names=aa_joint_names,
                 num_samples_per_parent=refine_samples_per_parent,
                 min_width=min_width,
                 step_size=step_size,
@@ -735,7 +754,7 @@ def search_aa_limits(
     return {
         "hand": hand,
         "human_data": human_data,
-        "optimized_joints": AA_JOINT_NAMES,
+        "optimized_joints": aa_joint_names,
         "reference_limits": _round_limit_dict(reference_limits),
         "current_urdf_limits": _round_limit_dict(current_limits),
         "adjacent_iou_pairs": adjacent_pair_names,
