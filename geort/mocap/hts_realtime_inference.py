@@ -348,7 +348,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--qpos-scale",
         type=float,
-        default=1.2,
+        default=1.05,
         help="Scale realtime qpos targets before clamping to URDF joint limits.",
     )
     return parser
