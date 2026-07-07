@@ -23,6 +23,7 @@ density_cap_qpos = build_target_cloud.density_cap_qpos
 extract_angles = build_target_cloud.extract_angles
 save_robot_kinematics_npz = build_target_cloud.save_robot_kinematics_npz
 build_target_cloud_file = build_target_cloud.build_target_cloud
+boost_fist_mcp1_qpos = build_target_cloud.boost_fist_mcp1_qpos
 
 
 def make_frames(count: int) -> np.ndarray:
@@ -170,6 +171,42 @@ def test_density_cap_qpos_limits_repeated_voxels_without_dropping_sparse_tail() 
     assert capped.shape == (5, 2)
     assert indices.tolist() == [0, 1, 2, 10, 11]
 
+
+
+def test_boost_fist_mcp1_qpos_only_pushes_selected_non_thumb_mcp1_toward_high() -> None:
+    joint_names = [
+        "F1-R-MCP1",
+        "F2-R-MCP1",
+        "F2-R-PIP",
+        "F3-R-MCP1",
+        "F4-R-MCP1",
+        "F5-R-MCP1",
+    ]
+    qpos = np.array(
+        [
+            [0.2, 0.5, 0.6, 0.7, 0.8, 0.9],
+            [0.2, 1.0, 0.6, 1.1, 1.2, 1.3],
+            [0.2, 1.5, 0.6, 1.5, 1.5, 1.5],
+        ],
+        dtype=np.float32,
+    )
+    q_high = np.array([0.8, 1.6, 1.9, 1.6, 1.6, 1.6], dtype=np.float32)
+
+    boosted = boost_fist_mcp1_qpos(
+        qpos,
+        joint_names=joint_names,
+        q_high=q_high,
+        fist_indices=np.array([0, 2], dtype=np.int64),
+        boost_alpha=0.25,
+    )
+
+    assert boosted[0, 0] == pytest.approx(qpos[0, 0])
+    assert boosted[0, 2] == pytest.approx(qpos[0, 2])
+    assert boosted[1].tolist() == pytest.approx(qpos[1].tolist())
+    assert boosted[0, 1] == pytest.approx(0.5 + 0.25 * (1.6 - 0.5))
+    assert boosted[0, 3] == pytest.approx(0.7 + 0.25 * (1.6 - 0.7))
+    assert boosted[2, 1] == pytest.approx(1.5 + 0.25 * (1.6 - 1.5))
+    assert boosted[2, 5] == pytest.approx(1.5 + 0.25 * (1.6 - 1.5))
 
 def test_save_robot_kinematics_npz_writes_dataset_compatible_fields(tmp_path: Path) -> None:
     qpos = np.array([[0.0, 0.1], [0.2, 0.3]], dtype=np.float32)

@@ -1,0 +1,260 @@
+{
+    "name": "custom_right",
+    "urdf_path": "./assets/custom_right/URDF_R.urdf",
+    "base_link": "base_link",
+    "joint_order": [
+        "F1-R-MCP2",
+        "F1-R-MCP1",
+        "F1-R-PIP",
+        "F1-R-DIP",
+        "F2-R-MCP2",
+        "F2-R-MCP1",
+        "F2-R-PIP",
+        "F2-R-DIP",
+        "F3-R-MCP2",
+        "F3-R-MCP1",
+        "F3-R-PIP",
+        "F3-R-DIP",
+        "F4-R-MCP2",
+        "F4-R-MCP1",
+        "F4-R-PIP",
+        "F4-R-DIP",
+        "F5-R-MCP2",
+        "F5-R-MCP1",
+        "F5-R-PIP",
+        "F5-R-DIP"
+    ],
+    "fingertip_link": [
+        {
+            "name": "thumb_pip",
+            "link": "F1-R-PIP",
+            "joint": [
+                "F1-R-MCP2",
+                "F1-R-MCP1",
+                "F1-R-PIP"
+            ],
+            "center_offset": [
+                0.0,
+                0.0,
+                -0.005
+            ],
+            "human_hand_id": 3,
+            "finger": "thumb",
+            "keypoint_type": "pip",
+            "loss_weight": 0.25
+        },
+        {
+            "name": "thumb_tip",
+            "link": "F1-R-DIP",
+            "joint": [
+                "F1-R-MCP2",
+                "F1-R-MCP1",
+                "F1-R-PIP",
+                "F1-R-DIP"
+            ],
+            "center_offset": [
+                0.018,
+                0.018,
+                0.006
+            ],
+            "human_hand_id": 4,
+            "finger": "thumb",
+            "keypoint_type": "tip",
+            "loss_weight": 1.0
+        },
+        {
+            "name": "index_pip",
+            "link": "F2-R-PIP",
+            "joint": [
+                "F2-R-MCP2",
+                "F2-R-MCP1",
+                "F2-R-PIP"
+            ],
+            "center_offset": [
+                -0.003,
+                0.0,
+                0.0
+            ],
+            "human_hand_id": 6,
+            "finger": "index",
+            "keypoint_type": "pip",
+            "loss_weight": 0.25
+        },
+        {
+            "name": "index_tip",
+            "link": "F2-R-DIP",
+            "joint": [
+                "F2-R-MCP2",
+                "F2-R-MCP1",
+                "F2-R-PIP",
+                "F2-R-DIP"
+            ],
+            "center_offset": [
+                -0.0055,
+                0.018,
+                0.0
+            ],
+            "human_hand_id": 8,
+            "finger": "index",
+            "keypoint_type": "tip",
+            "loss_weight": 1.0
+        },
+        {
+            "name": "middle_pip",
+            "link": "F3-R-PIP",
+            "joint": [
+                "F3-R-MCP2",
+                "F3-R-MCP1",
+                "F3-R-PIP"
+            ],
+            "center_offset": [
+                -0.006,
+                0.0,
+                0.0
+            ],
+            "human_hand_id": 10,
+            "finger": "middle",
+            "keypoint_type": "pip",
+            "loss_weight": 0.25
+        },
+        {
+            "name": "middle_tip",
+            "link": "F3-R-DIP",
+            "joint": [
+                "F3-R-MCP2",
+                "F3-R-MCP1",
+                "F3-R-PIP",
+                "F3-R-DIP"
+            ],
+            "center_offset": [
+                -0.0055,
+                0.018,
+                0.0
+            ],
+            "human_hand_id": 12,
+            "finger": "middle",
+            "keypoint_type": "tip",
+            "loss_weight": 1.0
+        },
+        {
+            "name": "ring_pip",
+            "link": "F4-R-PIP",
+            "joint": [
+                "F4-R-MCP2",
+                "F4-R-MCP1",
+                "F4-R-PIP"
+            ],
+            "center_offset": [
+                -0.006,
+                0.0,
+                0.0
+            ],
+            "human_hand_id": 14,
+            "finger": "ring",
+            "keypoint_type": "pip",
+            "loss_weight": 0.25
+        },
+        {
+            "name": "ring_tip",
+            "link": "F4-R-DIP",
+            "joint": [
+                "F4-R-MCP2",
+                "F4-R-MCP1",
+                "F4-R-PIP",
+                "F4-R-DIP"
+            ],
+            "center_offset": [
+                -0.0055,
+                0.018,
+                0.0
+            ],
+            "human_hand_id": 16,
+            "finger": "ring",
+            "keypoint_type": "tip",
+            "loss_weight": 1.0
+        },
+        {
+            "name": "pinky_pip",
+            "link": "F5-R-PIP",
+            "joint": [
+                "F5-R-MCP2",
+                "F5-R-MCP1",
+                "F5-R-PIP"
+            ],
+            "center_offset": [
+                -0.006,
+                0.0,
+                0.0
+            ],
+            "human_hand_id": 18,
+            "finger": "pinky",
+            "keypoint_type": "pip",
+            "loss_weight": 0.25
+        },
+        {
+            "name": "pinky_tip",
+            "link": "F5-R-DIP",
+            "joint": [
+                "F5-R-MCP2",
+                "F5-R-MCP1",
+                "F5-R-PIP",
+                "F5-R-DIP"
+            ],
+            "center_offset": [
+                -0.0055,
+                0.018,
+                0.0
+            ],
+            "human_hand_id": 20,
+            "finger": "pinky",
+            "keypoint_type": "tip",
+            "loss_weight": 1.0
+        }
+    ],
+    "joint": {
+        "lower": [
+            -0.3499999940395355,
+            -0.5199999809265137,
+            -0.3499999940395355,
+            -0.3499999940395355,
+            -0.6100000143051147,
+            -0.5199999809265137,
+            0.0,
+            0.0,
+            -0.6100000143051147,
+            -0.5199999809265137,
+            0.0,
+            0.0,
+            -0.6100000143051147,
+            -0.5199999809265137,
+            0.0,
+            0.0,
+            -0.6100000143051147,
+            -0.5199999809265137,
+            0.0,
+            0.0
+        ],
+        "upper": [
+            0.6100000143051147,
+            0.7850000262260437,
+            1.309999942779541,
+            1.309999942779541,
+            0.6100000143051147,
+            1.5700000524520874,
+            1.9199999570846558,
+            1.2200000286102295,
+            0.6100000143051147,
+            1.5700000524520874,
+            1.9199999570846558,
+            1.2200000286102295,
+            0.6100000143051147,
+            1.5700000524520874,
+            1.9199999570846558,
+            1.2200000286102295,
+            0.6100000143051147,
+            1.5700000524520874,
+            1.9199999570846558,
+            1.2200000286102295
+        ]
+    }
+}

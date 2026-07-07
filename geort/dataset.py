@@ -44,16 +44,30 @@ class MultiPointDataset:
 
 
 class FramePointDataset:
-    def __init__(self, points):
+    def __init__(self, points, frame_fields=None):
         self.points = np.asarray(points, dtype=np.float32)
         if self.points.ndim != 3 or self.points.shape[-1] != 3:
             raise ValueError(f"Expected frame points with shape [N, K, 3], got {self.points.shape}")
+        self.frame_fields = {}
+        if frame_fields:
+            for name, values in frame_fields.items():
+                values = np.asarray(values)
+                if values.shape[0] != self.points.shape[0]:
+                    raise ValueError(
+                        f"Frame field {name!r} length {values.shape[0]} does not match frame count {self.points.shape[0]}"
+                    )
+                self.frame_fields[name] = values
 
     def __len__(self):
         return self.points.shape[0]
 
     def __getitem__(self, idx):
-        return self.points[idx]
+        if not self.frame_fields:
+            return self.points[idx]
+        item = {"point": self.points[idx]}
+        for name, values in self.frame_fields.items():
+            item[name] = values[idx]
+        return item
 
 class RobotKinematicsDataset:
     def __init__(self, qpos_keypoint_file, keypoint_names):

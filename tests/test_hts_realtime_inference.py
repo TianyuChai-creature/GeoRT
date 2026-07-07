@@ -82,3 +82,11 @@ def test_realtime_inference_scales_and_clamps_qpos_targets(monkeypatch):
         hand.qpos_targets[0],
         np.array([0.55, -0.6, 2.2], dtype=np.float32),
     )
+
+
+def test_realtime_qpos_scale_defaults_to_1_2(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    args = realtime.build_arg_parser().parse_args([])
+
+    assert args.qpos_scale == 1.2

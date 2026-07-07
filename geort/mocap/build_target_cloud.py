@@ -300,6 +300,48 @@ def apply_mold(angles: np.ndarray, mold: Mold) -> np.ndarray:
     return np.stack(columns, axis=1).astype(np.float32)
 
 
+def _non_thumb_mcp1_indices(joint_names: list[str]) -> list[int]:
+    return [
+        idx
+        for idx, joint_name in enumerate(joint_names)
+        if joint_name.endswith("MCP1") and not joint_name.startswith("F1-")
+    ]
+
+
+def boost_fist_mcp1_qpos(
+    qpos: np.ndarray,
+    *,
+    joint_names: list[str],
+    q_high: np.ndarray,
+    fist_indices: np.ndarray,
+    boost_alpha: float,
+) -> np.ndarray:
+    qpos = np.asarray(qpos, dtype=np.float32)
+    q_high = np.asarray(q_high, dtype=np.float32)
+    fist_indices = np.asarray(fist_indices, dtype=np.int64)
+    if boost_alpha <= 0.0 or fist_indices.size == 0:
+        return qpos.astype(np.float32, copy=True)
+    if boost_alpha > 1.0:
+        raise ValueError("fist_mcp1_boost_alpha must be <= 1.0")
+    if qpos.ndim != 2:
+        raise ValueError(f"Expected qpos with shape [T, D], got {qpos.shape}")
+    if qpos.shape[1] != len(joint_names) or q_high.shape != (len(joint_names),):
+        raise ValueError("qpos, q_high, and joint_names dimensions must match")
+
+    boosted = qpos.astype(np.float32, copy=True)
+    mcp1_indices = _non_thumb_mcp1_indices(joint_names)
+    if not mcp1_indices:
+        return boosted
+    valid_fist_indices = fist_indices[(0 <= fist_indices) & (fist_indices < boosted.shape[0])]
+    if valid_fist_indices.size == 0:
+        return boosted
+    cols = np.asarray(mcp1_indices, dtype=np.int64)
+    current = boosted[np.ix_(valid_fist_indices, cols)]
+    target = q_high[cols].reshape(1, -1)
+    boosted[np.ix_(valid_fist_indices, cols)] = current + float(boost_alpha) * (target - current)
+    return boosted.astype(np.float32)
+
+
 def density_cap_qpos(
     qpos: np.ndarray,
     *,
@@ -381,19 +423,23 @@ def build_target_cloud(
     fist_boost_mcp_weight: float = 2.0,
     fist_boost_pip_weight: float = 1.0,
     fist_boost_dip_weight: float = 0.7,
+    fist_mcp1_boost_top_fraction: float = 0.0,
+    fist_mcp1_boost_alpha: float = 0.0,
 ) -> Path:
     rest_frames = _validate_frames(np.load(rest_path))
     motion_frames = _validate_frames(np.load(motion_path))
-    from geort.mocap.hts_prepare_training import append_fist_boost_frames  # deferred to avoid heavy imports at module level
-    motion_frames, _fist_boost_report = append_fist_boost_frames(
-        motion_frames,
-        top_fraction=fist_boost_top_fraction,
-        repeat=fist_boost_repeat,
-        score_mode=fist_boost_score_mode,
-        mcp_weight=fist_boost_mcp_weight,
-        pip_weight=fist_boost_pip_weight,
-        dip_weight=fist_boost_dip_weight,
-    )
+    if fist_boost_top_fraction > 0.0 and fist_boost_repeat > 0:
+        from geort.mocap.hts_prepare_training import append_fist_boost_frames  # deferred to avoid heavy imports at module level
+
+        motion_frames, _fist_boost_report = append_fist_boost_frames(
+            motion_frames,
+            top_fraction=fist_boost_top_fraction,
+            repeat=fist_boost_repeat,
+            score_mode=fist_boost_score_mode,
+            mcp_weight=fist_boost_mcp_weight,
+            pip_weight=fist_boost_pip_weight,
+            dip_weight=fist_boost_dip_weight,
+        )
     specs = build_angle_proxy_specs(config)
     joint_names = [spec.joint_name for spec in specs]
     rest_angles = extract_angles(rest_frames, specs)
@@ -413,6 +459,21 @@ def build_target_cloud(
         pin_k=pin_k,
     )
     qpos_all = apply_mold(motion_angles, mold)
+    if fist_mcp1_boost_top_fraction > 0.0 and fist_mcp1_boost_alpha > 0.0:
+        from geort.mocap.hts_prepare_training import compute_mcp_weighted_fist_curl_score
+
+        if fist_mcp1_boost_top_fraction > 1.0:
+            raise ValueError("fist_mcp1_boost_top_fraction must be <= 1.0")
+        score = compute_mcp_weighted_fist_curl_score(motion_frames)
+        selected_count = max(1, int(np.ceil(motion_frames.shape[0] * fist_mcp1_boost_top_fraction)))
+        fist_indices = np.argsort(score, kind="stable")[:selected_count]
+        qpos_all = boost_fist_mcp1_qpos(
+            qpos_all,
+            joint_names=joint_names,
+            q_high=q_high,
+            fist_indices=fist_indices,
+            boost_alpha=fist_mcp1_boost_alpha,
+        )
     qpos, kept_indices = density_cap_qpos(
         qpos_all,
         q_low=q_low,
@@ -456,6 +517,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fist-boost-mcp-weight", type=float, default=2.0)
     parser.add_argument("--fist-boost-pip-weight", type=float, default=1.0)
     parser.add_argument("--fist-boost-dip-weight", type=float, default=0.7)
+    parser.add_argument(
+        "--fist-mcp1-boost-top-fraction",
+        type=float,
+        default=0.0,
+        help="Fraction of strongest fist target frames whose non-thumb MCP1 qpos is pushed toward q_high; 0 disables.",
+    )
+    parser.add_argument(
+        "--fist-mcp1-boost-alpha",
+        type=float,
+        default=0.0,
+        help="Blend factor toward q_high for non-thumb MCP1 on selected fist target frames; 0 disables.",
+    )
     return parser
 
 
@@ -490,6 +563,8 @@ def main() -> None:
         fist_boost_mcp_weight=args.fist_boost_mcp_weight,
         fist_boost_pip_weight=args.fist_boost_pip_weight,
         fist_boost_dip_weight=args.fist_boost_dip_weight,
+        fist_mcp1_boost_top_fraction=args.fist_mcp1_boost_top_fraction,
+        fist_mcp1_boost_alpha=args.fist_mcp1_boost_alpha,
     )
     print(f"Human-shaped target cloud saved to {result}")
     print(f"Debug artifacts saved to {debug_dir}")
