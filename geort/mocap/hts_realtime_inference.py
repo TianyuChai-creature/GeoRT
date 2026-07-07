@@ -84,6 +84,19 @@ def smooth_live_points(points: np.ndarray, previous: np.ndarray | None, alpha: f
     return (alpha * points + (1.0 - alpha) * previous).astype(np.float32)
 
 
+def scale_and_clamp_qpos(qpos: np.ndarray, hand, qpos_scale: float) -> np.ndarray:
+    """Scale realtime qpos targets and keep them inside URDF joint limits."""
+    qpos_array = np.asarray(qpos, dtype=np.float32)
+    if qpos_scale == 1.0:
+        return qpos_array
+    lower, upper = hand.get_joint_limit()
+    return np.clip(
+        qpos_array * float(qpos_scale),
+        np.asarray(lower, dtype=np.float32),
+        np.asarray(upper, dtype=np.float32),
+    ).astype(np.float32)
+
+
 class TipContactVisualizer:
     """Visual-only fingertip proximity markers for collision-free URDFs."""
 
@@ -187,6 +200,7 @@ def run_realtime_viewer_loop(
     smoothing_alpha: float | None = None,
     fps_interval: int = 60,
     contact_visualizer: TipContactVisualizer | None = None,
+    qpos_scale: float = 1.0,
 ) -> int:
     """Refresh the viewer continuously and consume the newest available HTS frame."""
     processed = 0
@@ -209,6 +223,7 @@ def run_realtime_viewer_loop(
         last_points = points
 
         qpos = model.forward(points)
+        qpos = scale_and_clamp_qpos(qpos, hand, qpos_scale)
         hand.set_qpos_target(qpos)
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
@@ -233,6 +248,7 @@ def run_realtime_inference(
     smoothing_alpha: float | None = None,
     fps_interval: int = 60,
     contact_visualizer: TipContactVisualizer | None = None,
+    qpos_scale: float = 1.0,
 ) -> int:
     """Drive ``hand`` from a finite stream of GeoRT-ready points. Used by tests."""
     processed = 0
@@ -252,6 +268,7 @@ def run_realtime_inference(
         last_points = points
 
         qpos = model.forward(points)
+        qpos = scale_and_clamp_qpos(qpos, hand, qpos_scale)
         hand.set_qpos_target(qpos)
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
@@ -328,6 +345,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=15,
         help="Print contact proximity status every N processed frames; 0 only prints on state changes.",
     )
+    parser.add_argument(
+        "--qpos-scale",
+        type=float,
+        default=1.0,
+        help="Scale realtime qpos targets before clamping to URDF joint limits.",
+    )
     return parser
 
 
@@ -335,6 +358,8 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     if args.smoothing_alpha is not None and not 0.0 < args.smoothing_alpha <= 1.0:
         raise ValueError("--smoothing-alpha must be in (0, 1]")
+    if args.qpos_scale <= 0.0:
+        raise ValueError("--qpos-scale must be positive")
     hand_side = infer_hand_side(args.hand, args.hand_side)
 
     print(f"[HTSRealtime] Loading checkpoint tag={args.ckpt_tag} epoch={args.epoch}")
@@ -377,6 +402,7 @@ def main() -> None:
             smoothing_alpha=args.smoothing_alpha,
             fps_interval=args.fps_interval,
             contact_visualizer=contact_visualizer,
+            qpos_scale=args.qpos_scale,
         )
     except KeyboardInterrupt:
         print("\n[HTSRealtime] Stopped by user.")

@@ -47,6 +47,7 @@ class MoldJoint:
     q_default: float
     left_valid: bool
     right_valid: bool
+    angle_kind: str = "generic"
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,14 @@ def extract_angles(frames: np.ndarray, specs: Iterable[AngleProxySpec]) -> np.nd
     return np.stack(columns, axis=1).astype(np.float32)
 
 
+def default_qpos_from_limits(q_low: np.ndarray, q_high: np.ndarray) -> np.ndarray:
+    q_low = np.asarray(q_low, dtype=np.float32)
+    q_high = np.asarray(q_high, dtype=np.float32)
+    midpoint = (q_low + q_high) / 2.0
+    zero = np.zeros_like(midpoint, dtype=np.float32)
+    return np.where((q_low <= 0.0) & (q_high >= 0.0), zero, midpoint).astype(np.float32)
+
+
 def build_mold(
     *,
     rest_angles: np.ndarray,
@@ -235,6 +244,7 @@ def build_mold(
                 q_default=float(q_default[idx]),
                 left_valid=left_valid,
                 right_valid=right_valid,
+                angle_kind=_custom_joint_kind(joint_name) if joint_name.startswith("F") else "generic",
             )
         )
     return Mold(joints=joints)
@@ -245,15 +255,22 @@ def _map_one_joint(theta: np.ndarray, joint: MoldJoint) -> np.ndarray:
     if not joint.left_valid and not joint.right_valid:
         return out
 
+    if joint.angle_kind == "flexion":
+        left_target = joint.q_high
+        right_target = joint.q_low
+    else:
+        left_target = joint.q_low
+        right_target = joint.q_high
+
     left_mask = theta < joint.theta_rest
     right_mask = ~left_mask
     if joint.left_valid:
         denom = max(joint.theta_rest - joint.theta_lo, 1e-8)
         alpha = np.clip((joint.theta_rest - theta[left_mask]) / denom, 0.0, 1.0)
-        out[left_mask] = joint.q_default + alpha * (joint.q_low - joint.q_default)
+        out[left_mask] = joint.q_default + alpha * (left_target - joint.q_default)
     elif joint.right_valid:
         denom = max(joint.theta_hi - joint.theta_rest, 1e-8)
-        slope = (joint.q_high - joint.q_default) / denom
+        slope = (right_target - joint.q_default) / denom
         out[left_mask] = np.clip(
             joint.q_default + (theta[left_mask] - joint.theta_rest) * slope,
             min(joint.q_low, joint.q_high),
@@ -263,10 +280,10 @@ def _map_one_joint(theta: np.ndarray, joint: MoldJoint) -> np.ndarray:
     if joint.right_valid:
         denom = max(joint.theta_hi - joint.theta_rest, 1e-8)
         alpha = np.clip((theta[right_mask] - joint.theta_rest) / denom, 0.0, 1.0)
-        out[right_mask] = joint.q_default + alpha * (joint.q_high - joint.q_default)
+        out[right_mask] = joint.q_default + alpha * (right_target - joint.q_default)
     elif joint.left_valid:
         denom = max(joint.theta_rest - joint.theta_lo, 1e-8)
-        slope = (joint.q_default - joint.q_low) / denom
+        slope = (joint.q_default - left_target) / denom
         out[right_mask] = np.clip(
             joint.q_default + (theta[right_mask] - joint.theta_rest) * slope,
             min(joint.q_low, joint.q_high),
@@ -358,9 +375,25 @@ def build_target_cloud(
     voxel_size: float = 0.05,
     cap: int | None = None,
     pin_k: float = 2.0,
+    fist_boost_top_fraction: float = 0.0,
+    fist_boost_repeat: int = 0,
+    fist_boost_score_mode: str = "curl",
+    fist_boost_mcp_weight: float = 2.0,
+    fist_boost_pip_weight: float = 1.0,
+    fist_boost_dip_weight: float = 0.7,
 ) -> Path:
     rest_frames = _validate_frames(np.load(rest_path))
     motion_frames = _validate_frames(np.load(motion_path))
+    from geort.mocap.hts_prepare_training import append_fist_boost_frames  # deferred to avoid heavy imports at module level
+    motion_frames, _fist_boost_report = append_fist_boost_frames(
+        motion_frames,
+        top_fraction=fist_boost_top_fraction,
+        repeat=fist_boost_repeat,
+        score_mode=fist_boost_score_mode,
+        mcp_weight=fist_boost_mcp_weight,
+        pip_weight=fist_boost_pip_weight,
+        dip_weight=fist_boost_dip_weight,
+    )
     specs = build_angle_proxy_specs(config)
     joint_names = [spec.joint_name for spec in specs]
     rest_angles = extract_angles(rest_frames, specs)
@@ -369,7 +402,7 @@ def build_target_cloud(
     q_low, q_high = hand.get_joint_limit()
     q_low = np.asarray(q_low, dtype=np.float32)
     q_high = np.asarray(q_high, dtype=np.float32)
-    q_default = (q_low + q_high) / 2.0
+    q_default = default_qpos_from_limits(q_low, q_high)
     mold = build_mold(
         rest_angles=rest_angles,
         motion_angles=motion_angles,
@@ -408,6 +441,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--voxel-size", type=float, default=0.05)
     parser.add_argument("--cap", type=int, default=None)
     parser.add_argument("--pin-k", type=float, default=2.0)
+    parser.add_argument(
+        "--fist-boost-top-fraction", type=float, default=0.0,
+        help="Fraction of strongest fist frames to repeat before building target cloud; 0 disables.",
+    )
+    parser.add_argument(
+        "--fist-boost-repeat", type=int, default=0,
+        help="Number of extra repeats for selected strongest fist frames.",
+    )
+    parser.add_argument(
+        "--fist-boost-score-mode", choices=("curl", "mcp_weighted"), default="curl",
+        help="Score used to select frames for fist boost.",
+    )
+    parser.add_argument("--fist-boost-mcp-weight", type=float, default=2.0)
+    parser.add_argument("--fist-boost-pip-weight", type=float, default=1.0)
+    parser.add_argument("--fist-boost-dip-weight", type=float, default=0.7)
     return parser
 
 
@@ -436,6 +484,12 @@ def main() -> None:
         voxel_size=args.voxel_size,
         cap=args.cap,
         pin_k=args.pin_k,
+        fist_boost_top_fraction=args.fist_boost_top_fraction,
+        fist_boost_repeat=args.fist_boost_repeat,
+        fist_boost_score_mode=args.fist_boost_score_mode,
+        fist_boost_mcp_weight=args.fist_boost_mcp_weight,
+        fist_boost_pip_weight=args.fist_boost_pip_weight,
+        fist_boost_dip_weight=args.fist_boost_dip_weight,
     )
     print(f"Human-shaped target cloud saved to {result}")
     print(f"Debug artifacts saved to {debug_dir}")

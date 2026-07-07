@@ -107,6 +107,36 @@ def test_build_mold_marks_noise_side_as_invalid_and_maps_rest_to_default() -> No
     assert apply_mold(np.array([[joint.theta_hi]], dtype=np.float32), mold)[0, 0] == pytest.approx(2.0)
 
 
+def test_default_qpos_prefers_urdf_zero_when_within_joint_limits() -> None:
+    q_low = np.array([-0.61, 0.0, 1.0], dtype=np.float32)
+    q_high = np.array([0.61, 1.92, 2.0], dtype=np.float32)
+
+    q_default = build_target_cloud.default_qpos_from_limits(q_low, q_high)
+
+    assert np.allclose(q_default, [0.0, 0.0, 1.5])
+
+
+def test_flexion_mold_maps_smaller_human_angle_to_higher_robot_curl() -> None:
+    rest = np.array([[3.0], [3.02], [2.98], [3.01]], dtype=np.float32)
+    motion = np.array([[1.2], [1.4], [1.6], [2.8], [3.0]], dtype=np.float32)
+
+    mold = build_mold(
+        rest_angles=rest,
+        motion_angles=motion,
+        joint_names=["F3-R-PIP"],
+        q_low=np.array([0.0], dtype=np.float32),
+        q_high=np.array([1.92], dtype=np.float32),
+        q_default=np.array([0.0], dtype=np.float32),
+        pin_k=2.0,
+    )
+
+    joint = mold.joints[0]
+    qpos = apply_mold(np.array([[joint.theta_rest], [joint.theta_lo]], dtype=np.float32), mold)[:, 0]
+
+    assert qpos[0] == pytest.approx(0.0)
+    assert qpos[1] == pytest.approx(1.92)
+
+
 def test_apply_mold_keeps_double_invalid_joint_at_default() -> None:
     mold = build_target_cloud.Mold(
         joints=[
