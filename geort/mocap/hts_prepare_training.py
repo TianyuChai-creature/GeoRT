@@ -262,7 +262,7 @@ def prepare_training_dataset(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", default="data/hts_right.npy", help="Raw HTS .npy acquisition dataset.")
+    parser.add_argument("--input", default="data/hts_right_20260703_quest3_v3.npy", help="Raw HTS .npy acquisition dataset.")
     parser.add_argument("--output", default=None, help="Final training .npy path. Defaults to <input_stem>_train.npy.")
     parser.add_argument("--metadata", default=None, help="Training JSON path. Defaults to <input_stem>_train.json.")
     parser.add_argument("--dataset-id", default=None, help="Dataset id stored in the training JSON.")

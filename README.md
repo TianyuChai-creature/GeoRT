@@ -96,7 +96,7 @@ python geort/env/hand.py --hand allegro_right
 <span style="color:red"> If there is any segmentation error, please simplify the collision meshes or just remove all the `<collision>` fields in your URDF. </span> See the [Notes and Troubleshooting](#notes-and-troubleshooting) section.
 
 ### Step 2: Collect human hand mocap data.
-Now we need to collect some human hand data for training the retargeting model. The repository keeps the raw acquisition datasets `human_alex.npy`, `hts_right.npy`, and `hts_left.npy` under `data/`. Additional local recordings or derived datasets can also live there, but generated derivatives are ignored by Git.
+Now we need to collect some human hand data for training the retargeting model. This working tree keeps only the raw acquisition datasets needed to reproduce the current custom left/right checkpoints under `data/`; additional local recordings or derived datasets can also live there, but generated derivatives are ignored by Git.
 
 ```
 import geort
@@ -189,18 +189,18 @@ The raw acquisition datasets in `data/` are source training assets and stay in t
 For HTS recordings, generate the final training dataset in one step:
 
 ```bash
-python geort/mocap/hts_prepare_training.py --input data/hts_right.npy
+python geort/mocap/hts_prepare_training.py --input data/hts_right_20260703_quest3_v3.npy
 ```
 
-This writes two ignored artifacts next to the raw dataset: `data/hts_right_train.npy` and `data/hts_right_train.json`. The JSON is the training entry point and carries inline frame weights plus processing summaries:
+This writes two ignored artifacts next to the raw dataset: `data/hts_right_20260703_quest3_v3_train.npy` and `data/hts_right_20260703_quest3_v3_train.json`. The JSON is the training entry point and carries inline frame weights plus processing summaries:
 
 ```json
 {
-  "id": "hts_right_train",
-  "data_path": "hts_right_train.npy",
+  "id": "hts_right_20260703_quest3_v3_train",
+  "data_path": "hts_right_20260703_quest3_v3_train.npy",
   "weights": [1.0, 3.0],
   "processing": {
-    "source": "hts_right.npy",
+    "source": "hts_right_20260703_quest3_v3.npy",
     "raw_frames": 6135,
     "train_frames": 3200
   }
@@ -306,5 +306,3 @@ For any inquiries, please open an issue or contact the authors via email at ``zh
 
 ## License
 CC-by-NC license
-
-

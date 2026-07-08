@@ -251,9 +251,9 @@ def save_report(report: dict, output_path: Path | str) -> Path:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", default="data/hts_right.npy", help="Input GeoRT-compatible HTS .npy file.")
-    parser.add_argument("--output", default="data/hts_right_balanced.npy", help="Balanced output .npy file.")
-    parser.add_argument("--report", default="data/hts_right_stage2_balance.json", help="Stage 2 JSON report path.")
+    parser.add_argument("--input", default="data/hts_right_20260703_quest3_v3.npy", help="Input GeoRT-compatible HTS .npy file.")
+    parser.add_argument("--output", default="data/hts_right_20260703_quest3_v3_balanced.npy", help="Balanced output .npy file.")
+    parser.add_argument("--report", default="data/hts_right_20260703_quest3_v3_stage2_balance.json", help="Stage 2 JSON report path.")
     parser.add_argument("--voxel-size", type=float, default=0.005, help="Voxel size in meters for each 6D PIP/TIP axis.")
     parser.add_argument("--max-per-voxel", type=int, default=8, help="Maximum frames retained per occupied voxel per finger before full-frame union.")
     parser.add_argument(

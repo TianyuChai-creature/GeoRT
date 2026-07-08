@@ -33,6 +33,12 @@ RIGHT_MANUAL_CLOSURE_PRIOR_V1 = {
     "F4-R-MCP2": 0.239,
     "F5-R-MCP2": 0.552,
 }
+LEFT_MANUAL_CLOSURE_PRIOR_V1 = {
+    "F2-L-MCP2": -0.264,
+    "F3-L-MCP2": 0.0,
+    "F4-L-MCP2": 0.239,
+    "F5-L-MCP2": 0.552,
+}
 
 
 def aa_joint_names_for_hand(hand: str) -> list[str]:
@@ -290,11 +296,13 @@ def _min_reachable_distance(points_a: np.ndarray, points_b: np.ndarray) -> float
 def manual_closure_prior_for_hand(hand: str, joint_names: list[str], source: str) -> dict[str, float]:
     if source == "none":
         return {}
-    if source not in {"auto", "right_manual_v1"}:
+    if source not in {"auto", "right_manual_v1", "left_manual_v1"}:
         raise ValueError(f"Unsupported manual_closure_prior={source!r}")
     hand_name = hand.lower()
     if source == "right_manual_v1" or "right" in hand_name:
         return {joint: value for joint, value in RIGHT_MANUAL_CLOSURE_PRIOR_V1.items() if joint in joint_names}
+    if source == "left_manual_v1" or "left" in hand_name:
+        return {joint: value for joint, value in LEFT_MANUAL_CLOSURE_PRIOR_V1.items() if joint in joint_names}
     return {}
 
 
@@ -1476,7 +1484,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--closure_coverage_weight", type=float, default=0.0)
     parser.add_argument("--dataset_closure_replay_tolerance", type=float, default=0.25)
     parser.add_argument("--dataset_closure_replay_weight", type=float, default=5.0)
-    parser.add_argument("--manual_closure_prior", choices=["auto", "none", "right_manual_v1"], default="auto")
+    parser.add_argument("--manual_closure_prior", choices=["auto", "none", "right_manual_v1", "left_manual_v1"], default="auto")
     parser.add_argument("--manual_closure_prior_margin", type=float, default=0.10)
     parser.add_argument("--manual_closure_prior_weight", type=float, default=10.0)
     parser.add_argument("--regularization_weight", type=float, default=0.02)

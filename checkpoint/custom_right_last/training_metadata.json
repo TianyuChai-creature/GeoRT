@@ -8,9 +8,9 @@
     "mcp1_fist_prior_pip_weight": 1.0,
     "mcp1_fist_prior_target_alpha": 0.5,
     "mcp1_fist_prior_top_fraction": 0.08,
-    "mold_path": "data/custom_right_humanshaped_anchor_v4_mcp1boost_a06_debug/mold.json",
+    "mold_path": "data/custom_right_humanshaped_manual_prior_mcp1boost_a06_debug/mold.json",
     "save_every": 0,
-    "tag": "aa_limit_v2_mcp1prior_w1_a05_full",
+    "tag": "aa_limit_manual_prior_mcp1prior_w1_a05_full",
     "update_latest": true
   },
   "human_data_path": "/home/creature/Desktop/GeoRT/data/hts_right_20260703_quest3_v3.npy",
@@ -23,12 +23,12 @@
     "w_segment_direction": 0.5
   },
   "mold": {
-    "path": "data/custom_right_humanshaped_anchor_v4_mcp1boost_a06_debug/mold.json",
-    "sha256": "c1036d5f114a3a4bdf650b00afc289b4a44e121ad619acf5c7dc46bd3feac2b2"
+    "path": "data/custom_right_humanshaped_manual_prior_mcp1boost_a06_debug/mold.json",
+    "sha256": "b2deda55cc7454671b496f1b9a2984d0407b250668dd07d542d9d6179694ce99"
   },
   "n_epoch": 200,
   "target_cloud": {
     "path": "data/custom_right.npz",
-    "sha256": "ae57e9ca565b5e8e05cbc7b158e75d9c671946031297015f2ac69bf68507e6d0"
+    "sha256": "a86f347d14aba1748d78560f896eee2cbab1d76217dea722574afab1c9359658"
   }
 }

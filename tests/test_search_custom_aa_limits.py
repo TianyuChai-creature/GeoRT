@@ -5,6 +5,7 @@ import numpy as np
 from geort.mocap.search_custom_aa_limits import (
     REFERENCE_AA_LIMIT,
     generate_aa_limit_candidates,
+    manual_closure_prior_for_hand,
     reference_aa_limits_for_joints,
     score_limit_candidate,
 )
@@ -42,6 +43,17 @@ def test_reference_aa_limits_include_manual_right_closure_pose() -> None:
     for joint_name, value in manual_closure_pose.items():
         lower, upper = reference_limits[joint_name]
         assert lower <= value <= upper
+
+
+def test_auto_manual_closure_prior_applies_same_pose_to_left_hand() -> None:
+    joint_names = ["F2-L-MCP2", "F3-L-MCP2", "F4-L-MCP2", "F5-L-MCP2"]
+
+    assert manual_closure_prior_for_hand("custom_left", joint_names, "auto") == {
+        "F2-L-MCP2": -0.264,
+        "F3-L-MCP2": 0.0,
+        "F4-L-MCP2": 0.239,
+        "F5-L-MCP2": 0.552,
+    }
 
 
 def test_random_candidates_are_bounded_by_reference_limits_not_current_urdf_limits() -> None:
@@ -289,4 +301,3 @@ def test_score_limit_candidate_penalizes_limits_that_crop_manual_closure_prior()
     assert prior["joint_metrics"]["F5-R-MCP2"]["passes"] is False
     assert prior["penalty"] > 0.0
     assert report["score"] > 0.0
-
