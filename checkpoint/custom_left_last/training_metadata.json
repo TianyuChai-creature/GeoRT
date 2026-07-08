@@ -1,0 +1,34 @@
+{
+  "chamfer_target": "human",
+  "cli_args": {
+    "chamfer_target": "human",
+    "chamfer_target_path": "data/custom_left.npz",
+    "mcp1_fist_prior_dip_weight": 0.7,
+    "mcp1_fist_prior_mcp_weight": 2.0,
+    "mcp1_fist_prior_pip_weight": 1.0,
+    "mcp1_fist_prior_target_alpha": 0.5,
+    "mcp1_fist_prior_top_fraction": 0.08,
+    "mold_path": "data/custom_left_humanshaped_manual_prior_mcp1boost_a06_debug/mold.json",
+    "save_every": 0,
+    "tag": "aa_limit_manual_prior_mcp1prior_w1_a05_full",
+    "update_latest": true
+  },
+  "human_data_path": "/home/creature/Desktop/GeoRT/data/hts_left.npy",
+  "loss_weights": {
+    "w_chamfer": 80.0,
+    "w_collision": 0.0,
+    "w_curvature": 0.1,
+    "w_mcp1_fist_prior": 1.0,
+    "w_pinch": 5.0,
+    "w_segment_direction": 0.5
+  },
+  "mold": {
+    "path": "data/custom_left_humanshaped_manual_prior_mcp1boost_a06_debug/mold.json",
+    "sha256": "61ab91a28651d6749422ef14a6de9c061a49e78823dfb9aa52f4e18ab06a43f4"
+  },
+  "n_epoch": 200,
+  "target_cloud": {
+    "path": "data/custom_left.npz",
+    "sha256": "a591da1b93d6044765b29237c3d6f70ace75b42fd30f2995d56853432f832323"
+  }
+}

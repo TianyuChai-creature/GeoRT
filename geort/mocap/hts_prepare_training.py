@@ -32,6 +32,143 @@ def default_output_paths(source_path: Path | str) -> tuple[Path, Path]:
     return parent / f"{stem}_train.npy", parent / f"{stem}_train.json"
 
 
+NON_THUMB_FINGER_LANDMARKS = (
+    (5, 6, 7, 8),
+    (9, 10, 11, 12),
+    (13, 14, 15, 16),
+    (17, 18, 19, 20),
+)
+
+
+def _safe_normalize(vec: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(vec, axis=-1, keepdims=True)
+    return vec / np.maximum(norm, 1e-8)
+
+
+def _joint_angle(frames: np.ndarray, ids: tuple[int, int, int, int], local_joint: int) -> np.ndarray:
+    a = frames[:, ids[local_joint - 1], :] - frames[:, ids[local_joint], :]
+    b = frames[:, ids[local_joint + 1], :] - frames[:, ids[local_joint], :]
+    a = _safe_normalize(a)
+    b = _safe_normalize(b)
+    dot = np.clip(np.sum(a * b, axis=1), -1.0, 1.0)
+    return np.arccos(dot).astype(np.float32)
+
+
+def _mcp_angle(frames: np.ndarray, ids: tuple[int, int, int, int]) -> np.ndarray:
+    wrist = frames[:, 0, :]
+    mcp = frames[:, ids[0], :]
+    pip = frames[:, ids[1], :]
+    a = _safe_normalize(wrist - mcp)
+    b = _safe_normalize(pip - mcp)
+    dot = np.clip(np.sum(a * b, axis=1), -1.0, 1.0)
+    return np.arccos(dot).astype(np.float32)
+
+
+def compute_fist_curl_score(frames: np.ndarray) -> np.ndarray:
+    frames = np.asarray(frames, dtype=np.float32)
+    if frames.ndim != 3 or frames.shape[1:] != (21, 3):
+        raise ValueError(f"Expected HTS frames with shape [T, 21, 3], got {frames.shape}")
+    angles = []
+    for ids in NON_THUMB_FINGER_LANDMARKS:
+        angles.append(_joint_angle(frames, ids, local_joint=1))
+        angles.append(_joint_angle(frames, ids, local_joint=2))
+    return np.stack(angles, axis=1).mean(axis=1).astype(np.float32)
+
+
+def compute_mcp_weighted_fist_curl_score(
+    frames: np.ndarray,
+    *,
+    mcp_weight: float = 2.0,
+    pip_weight: float = 1.0,
+    dip_weight: float = 0.7,
+) -> np.ndarray:
+    frames = np.asarray(frames, dtype=np.float32)
+    if frames.ndim != 3 or frames.shape[1:] != (21, 3):
+        raise ValueError(f"Expected HTS frames with shape [T, 21, 3], got {frames.shape}")
+    if mcp_weight < 0.0 or pip_weight < 0.0 or dip_weight < 0.0:
+        raise ValueError("fist boost score weights must be non-negative")
+    weight_sum = float(mcp_weight + pip_weight + dip_weight)
+    if weight_sum <= 0.0:
+        raise ValueError("at least one fist boost score weight must be positive")
+
+    scores = []
+    for ids in NON_THUMB_FINGER_LANDMARKS:
+        mcp = _mcp_angle(frames, ids)
+        pip = _joint_angle(frames, ids, local_joint=1)
+        dip = _joint_angle(frames, ids, local_joint=2)
+        scores.append((mcp * mcp_weight + pip * pip_weight + dip * dip_weight) / weight_sum)
+    return np.stack(scores, axis=1).mean(axis=1).astype(np.float32)
+
+
+def _compute_fist_boost_score(
+    frames: np.ndarray,
+    *,
+    score_mode: str,
+    mcp_weight: float,
+    pip_weight: float,
+    dip_weight: float,
+) -> np.ndarray:
+    if score_mode == "curl":
+        return compute_fist_curl_score(frames)
+    if score_mode == "mcp_weighted":
+        return compute_mcp_weighted_fist_curl_score(
+            frames,
+            mcp_weight=mcp_weight,
+            pip_weight=pip_weight,
+            dip_weight=dip_weight,
+        )
+    raise ValueError(f"Unsupported fist boost score mode {score_mode!r}")
+
+
+def append_fist_boost_frames(
+    frames: np.ndarray,
+    *,
+    top_fraction: float = 0.05,
+    repeat: int = 0,
+    score_mode: str = "curl",
+    mcp_weight: float = 2.0,
+    pip_weight: float = 1.0,
+    dip_weight: float = 0.7,
+) -> tuple[np.ndarray, dict]:
+    frames = np.asarray(frames, dtype=np.float32)
+    if repeat <= 0 or top_fraction <= 0.0:
+        return frames, {
+            "enabled": False,
+            "top_fraction": float(top_fraction),
+            "repeat": int(repeat),
+            "score_mode": score_mode,
+            "score_weights": {"mcp": float(mcp_weight), "pip": float(pip_weight), "dip": float(dip_weight)},
+            "selected_frames": 0,
+            "added_frames": 0,
+        }
+    if top_fraction > 1.0:
+        raise ValueError("fist_boost_top_fraction must be <= 1.0")
+
+    score = _compute_fist_boost_score(
+        frames,
+        score_mode=score_mode,
+        mcp_weight=mcp_weight,
+        pip_weight=pip_weight,
+        dip_weight=dip_weight,
+    )
+    selected_count = max(1, int(np.ceil(frames.shape[0] * top_fraction)))
+    selected = np.argsort(score, kind="stable")[:selected_count]
+    repeated = np.repeat(frames[selected], repeat, axis=0)
+    boosted = np.concatenate([frames, repeated], axis=0).astype(np.float32)
+    return boosted, {
+        "enabled": True,
+        "top_fraction": float(top_fraction),
+        "repeat": int(repeat),
+        "score_mode": score_mode,
+        "score_weights": {"mcp": float(mcp_weight), "pip": float(pip_weight), "dip": float(dip_weight)},
+        "selected_frames": int(selected_count),
+        "added_frames": int(repeated.shape[0]),
+        "score_p05": float(np.percentile(score, 5)),
+        "score_p50": float(np.percentile(score, 50)),
+        "score_p95": float(np.percentile(score, 95)),
+    }
+
+
 def prepare_training_dataset(
     *,
     source_path: Path | str,
@@ -44,6 +181,12 @@ def prepare_training_dataset(
     contact_threshold: float = 0.025,
     contact_bonus: float = 2.0,
     max_weight: float = 5.0,
+    fist_boost_top_fraction: float = 0.0,
+    fist_boost_repeat: int = 0,
+    fist_boost_score_mode: str = "curl",
+    fist_boost_mcp_weight: float = 2.0,
+    fist_boost_pip_weight: float = 1.0,
+    fist_boost_dip_weight: float = 0.7,
 ) -> tuple[Path, Path]:
     source = Path(source_path)
     default_data, default_metadata = default_output_paths(source)
@@ -59,6 +202,15 @@ def prepare_training_dataset(
         contact_threshold=contact_threshold,
     )
     train_frames = np.asarray(frames, dtype=np.float32)[selected]
+    train_frames, fist_boost_report = append_fist_boost_frames(
+        train_frames,
+        top_fraction=fist_boost_top_fraction,
+        repeat=fist_boost_repeat,
+        score_mode=fist_boost_score_mode,
+        mcp_weight=fist_boost_mcp_weight,
+        pip_weight=fist_boost_pip_weight,
+        dip_weight=fist_boost_dip_weight,
+    )
 
     stage2_report = build_stage2_report(
         frames,
@@ -101,6 +253,7 @@ def prepare_training_dataset(
             "train_frames": int(train_frames.shape[0]),
             "stage2": stage2_report,
             "stage3": stage3_report,
+            "fist_boost": fist_boost_report,
         },
     }
     metadata.write_text(json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
@@ -109,7 +262,7 @@ def prepare_training_dataset(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", default="data/hts_right.npy", help="Raw HTS .npy acquisition dataset.")
+    parser.add_argument("--input", default="data/hts_right_20260703_quest3_v3.npy", help="Raw HTS .npy acquisition dataset.")
     parser.add_argument("--output", default=None, help="Final training .npy path. Defaults to <input_stem>_train.npy.")
     parser.add_argument("--metadata", default=None, help="Training JSON path. Defaults to <input_stem>_train.json.")
     parser.add_argument("--dataset-id", default=None, help="Dataset id stored in the training JSON.")
@@ -119,6 +272,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--contact-threshold", type=float, default=0.025, help="Tip-tip contact threshold in meters.")
     parser.add_argument("--contact-bonus", type=float, default=2.0, help="Weight bonus added to detected contact frames.")
     parser.add_argument("--max-weight", type=float, default=5.0, help="Maximum frame weight.")
+    parser.add_argument("--fist-boost-top-fraction", type=float, default=0.0, help="Fraction of strongest fist frames to repeat after balancing; 0 disables.")
+    parser.add_argument("--fist-boost-repeat", type=int, default=0, help="Number of extra repeats for selected strongest fist frames.")
+    parser.add_argument("--fist-boost-score-mode", choices=("curl", "mcp_weighted"), default="curl", help="Score used to select frames for fist boost.")
+    parser.add_argument("--fist-boost-mcp-weight", type=float, default=2.0, help="MCP proxy weight for mcp_weighted fist boost selection.")
+    parser.add_argument("--fist-boost-pip-weight", type=float, default=1.0, help="PIP proxy weight for mcp_weighted fist boost selection.")
+    parser.add_argument("--fist-boost-dip-weight", type=float, default=0.7, help="DIP proxy weight for mcp_weighted fist boost selection.")
     return parser
 
 
@@ -135,6 +294,12 @@ def main() -> None:
         contact_threshold=args.contact_threshold,
         contact_bonus=args.contact_bonus,
         max_weight=args.max_weight,
+        fist_boost_top_fraction=args.fist_boost_top_fraction,
+        fist_boost_repeat=args.fist_boost_repeat,
+        fist_boost_score_mode=args.fist_boost_score_mode,
+        fist_boost_mcp_weight=args.fist_boost_mcp_weight,
+        fist_boost_pip_weight=args.fist_boost_pip_weight,
+        fist_boost_dip_weight=args.fist_boost_dip_weight,
     )
     doc = json.loads(metadata.read_text(encoding="utf-8"))
     processing = doc["processing"]

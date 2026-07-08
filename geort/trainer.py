@@ -21,6 +21,7 @@ from geort.env.hand import HandKinematicModel
 from geort.loss import chamfer_distance
 from geort.formatter import HandFormatter
 from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointDataset
+from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
 from datetime import datetime
 from tqdm import tqdm 
 import os
@@ -85,6 +86,51 @@ def compute_finger_segment_direction_loss(point, embedded_point, segment_pairs):
 
     return torch.stack(losses, dim=1).mean()
 
+
+def non_thumb_mcp1_joint_indices(joint_order):
+    return [
+        idx
+        for idx, name in enumerate(joint_order)
+        if name.endswith("MCP1") and not name.startswith("F1-")
+    ]
+
+
+def compute_mcp1_fist_prior_loss(joint, *, fist_mask, mcp1_indices, target_alpha=0.5):
+    if not mcp1_indices:
+        return torch.zeros((), device=joint.device, dtype=joint.dtype)
+    if target_alpha < 0.0 or target_alpha > 1.0:
+        raise ValueError("target_alpha must be in [0, 1]")
+
+    mask = fist_mask.to(device=joint.device, dtype=joint.dtype).reshape(-1)
+    if mask.sum() <= 0:
+        return torch.zeros((), device=joint.device, dtype=joint.dtype)
+
+    selected = joint[:, mcp1_indices]
+    target = selected.detach() + float(target_alpha) * (1.0 - selected.detach())
+    loss = ((selected - target) ** 2) * mask.unsqueeze(1)
+    return loss.sum() / (mask.sum().clamp_min(1e-7) * len(mcp1_indices))
+
+
+def compute_mcp1_fist_prior_mask(frames, *, top_fraction=0.05, mcp_weight=2.0, pip_weight=1.0, dip_weight=0.7):
+    if top_fraction <= 0.0:
+        return None
+    if top_fraction > 1.0:
+        raise ValueError("mcp1_fist_prior_top_fraction must be <= 1.0")
+
+    from geort.mocap.hts_prepare_training import compute_mcp_weighted_fist_curl_score
+
+    scores = compute_mcp_weighted_fist_curl_score(
+        frames,
+        mcp_weight=mcp_weight,
+        pip_weight=pip_weight,
+        dip_weight=dip_weight,
+    )
+    selected_count = max(1, int(np.ceil(frames.shape[0] * top_fraction)))
+    selected = np.argsort(scores, kind="stable")[:selected_count]
+    mask = np.zeros(frames.shape[0], dtype=np.float32)
+    mask[selected] = 1.0
+    return mask
+
 def find_human_weight_path(human_data_path):
     manifest = maybe_load_dataset_manifest(human_data_path)
     if manifest is None:
@@ -115,7 +161,16 @@ def should_save_epoch_checkpoint(epoch, n_epoch, save_every=0):
     return save_every > 0 and (epoch + 1) % save_every == 0
 
 
-def prepare_human_training_dataset(human_data_path, human_ids):
+def prepare_human_training_dataset(
+    human_data_path,
+    human_ids,
+    *,
+    mcp1_fist_prior_enabled=False,
+    mcp1_fist_prior_top_fraction=0.05,
+    mcp1_fist_prior_mcp_weight=2.0,
+    mcp1_fist_prior_pip_weight=1.0,
+    mcp1_fist_prior_dip_weight=0.7,
+):
     manifest = maybe_load_dataset_manifest(human_data_path)
     data_path = manifest.data_path if manifest is not None else Path(human_data_path)
 
@@ -133,7 +188,18 @@ def prepare_human_training_dataset(human_data_path, human_ids):
             f"Frame weights length {weights.shape} does not match frame count {selected_points.shape[0]}"
         )
 
-    return FramePointDataset(selected_points), weights
+    frame_fields = None
+    if mcp1_fist_prior_enabled:
+        mask = compute_mcp1_fist_prior_mask(
+            human_points,
+            top_fraction=mcp1_fist_prior_top_fraction,
+            mcp_weight=mcp1_fist_prior_mcp_weight,
+            pip_weight=mcp1_fist_prior_pip_weight,
+            dip_weight=mcp1_fist_prior_dip_weight,
+        )
+        frame_fields = {"mcp1_fist_prior_mask": mask}
+
+    return FramePointDataset(selected_points, frame_fields=frame_fields), weights
 
 
 def get_float_list_from_np(np_vector):
@@ -152,19 +218,30 @@ class GeoRTTrainer:
         self.config = config
         self.hand = HandKinematicModel.build_from_config(self.config)
 
-    def get_robot_pointcloud(self, keypoint_names):
+    def get_robot_pointcloud(self, keypoint_names, chamfer_target="uniform", chamfer_target_path=None):
         '''
             Utility getter function. Return the robot fingertip point cloud.
         '''
-        kinematics_dataset = self.get_robot_kinematics_dataset()
+        kinematics_dataset = self.get_robot_kinematics_dataset(
+            chamfer_target=chamfer_target,
+            chamfer_target_path=chamfer_target_path,
+        )
         return kinematics_dataset.export_robot_pointcloud(keypoint_names)
         
-    def get_robot_kinematics_dataset(self):
+    def get_robot_kinematics_dataset(self, chamfer_target="uniform", chamfer_target_path=None):
         '''
-            Utility getter function. Return the robot kinematics dataset
+            Utility getter function. Return the robot kinematics dataset.
+
+            FK training always calls this with the default uniform target. IK
+            chamfer can request a prebuilt human-shaped target cloud.
         '''
-        dataset_path = self.get_robot_kinematics_dataset_path(postfix=True)
-        if not os.path.exists(dataset_path):
+        target = resolve_chamfer_target_path(
+            hand_name=self.config["name"],
+            chamfer_target=chamfer_target,
+            explicit_path=chamfer_target_path,
+        )
+        dataset_path = target.path.as_posix()
+        if chamfer_target == "uniform" and not os.path.exists(dataset_path):
             dataset = self.generate_robot_kinematics_dataset(n_total=100000, save=True)
             dataset_path = self.get_robot_kinematics_dataset_path(postfix=True)
         
@@ -303,8 +380,17 @@ class GeoRTTrainer:
         w_pinch = kwargs.get("w_pinch", 1.0)
         pinch_threshold = kwargs.get("pinch_threshold", 0.015)
         w_segment_direction = kwargs.get("w_segment_direction", 0.5)
+        w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
+        mcp1_fist_prior_top_fraction = kwargs.get("mcp1_fist_prior_top_fraction", 0.05)
+        mcp1_fist_prior_target_alpha = kwargs.get("mcp1_fist_prior_target_alpha", 0.5)
+        mcp1_fist_prior_mcp_weight = kwargs.get("mcp1_fist_prior_mcp_weight", 2.0)
+        mcp1_fist_prior_pip_weight = kwargs.get("mcp1_fist_prior_pip_weight", 1.0)
+        mcp1_fist_prior_dip_weight = kwargs.get("mcp1_fist_prior_dip_weight", 0.7)
         save_every = int(kwargs.get("save_every", 0) or 0)
         update_latest = bool(kwargs.get("update_latest", True))
+        chamfer_target = kwargs.get("chamfer_target", "uniform")
+        chamfer_target_path = kwargs.get("chamfer_target_path", None)
+        mold_path = kwargs.get("mold_path", None)
 
         save_dir = f"./checkpoint/{hand_model_name}_{generate_current_timestring()}"
         if exp_tag != '':
@@ -328,20 +414,80 @@ class GeoRTTrainer:
         if update_latest:
             save_json(export_config, Path(last_save_dir) / "config.json")
 
+        resolved_chamfer_target = resolve_chamfer_target_path(
+            hand_name=hand_model_name,
+            chamfer_target=chamfer_target,
+            explicit_path=chamfer_target_path,
+        )
         # Dataset.
         robot_keypoint_names = keypoint_info['link']
         n_keypoints = len(robot_keypoint_names)
 
-        robot_points = self.get_robot_pointcloud(robot_keypoint_names)
+        effective_chamfer_target_path = (
+            resolved_chamfer_target.path
+            if chamfer_target != "uniform" or chamfer_target_path is not None
+            else None
+        )
+        robot_points = self.get_robot_pointcloud(
+            robot_keypoint_names,
+            chamfer_target=chamfer_target,
+            chamfer_target_path=effective_chamfer_target_path,
+        )
+        metadata_target_path = (
+            resolved_chamfer_target.path
+            if effective_chamfer_target_path is not None
+            else Path(self.get_robot_kinematics_dataset_path(postfix=True))
+        )
+        training_metadata = build_training_metadata(
+            chamfer_target=chamfer_target,
+            target_path=metadata_target_path,
+            mold_path=mold_path,
+            human_data_path=human_data_path,
+            n_epoch=n_epoch,
+            loss_weights={
+                "w_chamfer": w_chamfer,
+                "w_curvature": w_curvature,
+                "w_collision": w_collision,
+                "w_pinch": w_pinch,
+                "w_segment_direction": w_segment_direction,
+                "w_mcp1_fist_prior": w_mcp1_fist_prior,
+            },
+            cli_args={
+                "tag": exp_tag,
+                "chamfer_target": chamfer_target,
+                "chamfer_target_path": str(chamfer_target_path) if chamfer_target_path else None,
+                "mold_path": str(mold_path) if mold_path else None,
+                "save_every": save_every,
+                "update_latest": update_latest,
+                "mcp1_fist_prior_top_fraction": mcp1_fist_prior_top_fraction,
+                "mcp1_fist_prior_target_alpha": mcp1_fist_prior_target_alpha,
+                "mcp1_fist_prior_mcp_weight": mcp1_fist_prior_mcp_weight,
+                "mcp1_fist_prior_pip_weight": mcp1_fist_prior_pip_weight,
+                "mcp1_fist_prior_dip_weight": mcp1_fist_prior_dip_weight,
+            },
+        )
+        save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
+        if update_latest:
+            save_training_metadata(Path(last_save_dir) / "training_metadata.json", training_metadata)
 
         human_finger_idxes = keypoint_info["human_id"]
         keypoint_weights = torch.tensor(keypoint_info["weight"], dtype=torch.float32).cuda()
         pinch_pairs = keypoint_info["pinch_pairs"]
         segment_pairs = keypoint_info["segment_pairs"]
+        mcp1_prior_joint_indices = non_thumb_mcp1_joint_indices(self.config["joint_order"])
+        mcp1_fist_prior_enabled = w_mcp1_fist_prior > 0.0
         for robot_keypoint_name, human_id in zip(robot_keypoint_names, human_finger_idxes):
             print(f"Robot Keypoint {robot_keypoint_name}: Human Id: {human_id}")
 
-        point_dataset_human, human_frame_weights = prepare_human_training_dataset(human_data_path, human_finger_idxes)
+        point_dataset_human, human_frame_weights = prepare_human_training_dataset(
+            human_data_path,
+            human_finger_idxes,
+            mcp1_fist_prior_enabled=mcp1_fist_prior_enabled,
+            mcp1_fist_prior_top_fraction=mcp1_fist_prior_top_fraction,
+            mcp1_fist_prior_mcp_weight=mcp1_fist_prior_mcp_weight,
+            mcp1_fist_prior_pip_weight=mcp1_fist_prior_pip_weight,
+            mcp1_fist_prior_dip_weight=mcp1_fist_prior_dip_weight,
+        )
         if human_frame_weights is not None:
             sampler = WeightedRandomSampler(
                 weights=torch.from_numpy(human_frame_weights).double(),
@@ -358,7 +504,13 @@ class GeoRTTrainer:
             for batch_idx, batch in enumerate(point_dataloader):
                 direction_loss = 0
 
-                point = batch.cuda() # [B, N, 3]
+                mcp1_fist_prior_mask = None
+                if isinstance(batch, dict):
+                    point = batch["point"].cuda() # [B, N, 3]
+                    if "mcp1_fist_prior_mask" in batch:
+                        mcp1_fist_prior_mask = batch["mcp1_fist_prior_mask"].cuda()
+                else:
+                    point = batch.cuda() # [B, N, 3]
                 joint = ik_model(point) # [B, DOF]
                 embedded_point = fk_model(joint) # [B, N, 3]
 
@@ -409,6 +561,17 @@ class GeoRTTrainer:
                 # human hand scale as an absolute position target.
                 segment_direction_loss = compute_finger_segment_direction_loss(point, embedded_point, segment_pairs)
 
+                # [MCP1 fist prior]
+                if mcp1_fist_prior_mask is not None:
+                    mcp1_fist_prior_loss = compute_mcp1_fist_prior_loss(
+                        joint,
+                        fist_mask=mcp1_fist_prior_mask,
+                        mcp1_indices=mcp1_prior_joint_indices,
+                        target_alpha=mcp1_fist_prior_target_alpha,
+                    )
+                else:
+                    mcp1_fist_prior_loss = torch.zeros((), device=joint.device, dtype=joint.dtype)
+
                 # [Collision loss]
                 # if classifier is not None:
                 #     real_labels = torch.ones(joint.size(0), dtype=torch.long).to(joint.device)
@@ -426,7 +589,8 @@ class GeoRTTrainer:
                        curvature_loss * w_curvature + \
                        collision_loss * w_collision + \
                        pinch_loss * w_pinch + \
-                       segment_direction_loss * w_segment_direction
+                       segment_direction_loss * w_segment_direction + \
+                       mcp1_fist_prior_loss * w_mcp1_fist_prior
 
                 ik_optim.zero_grad()
                 loss.backward()
@@ -441,6 +605,7 @@ class GeoRTTrainer:
                         f" - Collision: {format_loss(collision_loss.item())}"
                         f" - Pinch: {format_loss(pinch_loss.item())}"
                         f" - SegmentDirection: {format_loss(segment_direction_loss.item())}"
+                        f" - MCP1FistPrior: {format_loss(mcp1_fist_prior_loss.item())}"
                     )
 
 
@@ -469,7 +634,16 @@ if __name__ == '__main__':
     parser.add_argument('--w_pinch', type=float, default=1.0)
     parser.add_argument('--pinch_threshold', type=float, default=0.015)
     parser.add_argument('--w_segment_direction', type=float, default=0.5)
+    parser.add_argument('--w_mcp1_fist_prior', type=float, default=0.0, help='Weight for strong-fist MCP1 prior loss; 0 disables it.')
+    parser.add_argument('--mcp1_fist_prior_top_fraction', type=float, default=0.05, help='Fraction of strongest fist frames used by MCP1 prior.')
+    parser.add_argument('--mcp1_fist_prior_target_alpha', type=float, default=0.5, help='Blend from predicted normalized MCP1 toward upper limit for prior target.')
+    parser.add_argument('--mcp1_fist_prior_mcp_weight', type=float, default=2.0)
+    parser.add_argument('--mcp1_fist_prior_pip_weight', type=float, default=1.0)
+    parser.add_argument('--mcp1_fist_prior_dip_weight', type=float, default=0.7)
     parser.add_argument('--save_every', type=int, default=0, help='Save epoch_N.pth every N epochs; 0 keeps only last.pth.')
+    parser.add_argument('--chamfer_target', choices=('uniform', 'human'), default='uniform', help='Chamfer target cloud source.')
+    parser.add_argument('--chamfer_target_path', default=None, help='Explicit chamfer target .npz path. Human defaults to data/<hand>_humanshaped.npz.')
+    parser.add_argument('--mold_path', default=None, help='Optional mold.json path to record in checkpoint metadata.')
     parser.add_argument('--no_update_latest', action='store_true', help='Do not update checkpoint/<hand>_last.')
 
     args = parser.parse_args()
@@ -489,5 +663,14 @@ if __name__ == '__main__':
         w_pinch=args.w_pinch,
         pinch_threshold=args.pinch_threshold,
         w_segment_direction=args.w_segment_direction,
+        w_mcp1_fist_prior=args.w_mcp1_fist_prior,
+        mcp1_fist_prior_top_fraction=args.mcp1_fist_prior_top_fraction,
+        mcp1_fist_prior_target_alpha=args.mcp1_fist_prior_target_alpha,
+        mcp1_fist_prior_mcp_weight=args.mcp1_fist_prior_mcp_weight,
+        mcp1_fist_prior_pip_weight=args.mcp1_fist_prior_pip_weight,
+        mcp1_fist_prior_dip_weight=args.mcp1_fist_prior_dip_weight,
         save_every=args.save_every,
+        chamfer_target=args.chamfer_target,
+        chamfer_target_path=args.chamfer_target_path,
+        mold_path=args.mold_path,
         update_latest=not args.no_update_latest)

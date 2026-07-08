@@ -1,0 +1,29 @@
+{
+  "created_at": "2026-07-07T08:48:23.204730+00:00",
+  "hand_side": "right",
+  "id": "20260707_anchor_v4",
+  "kind": "anchor_rest_only",
+  "name": "hts",
+  "notes": "right hand anchor/rest recaptured after URDF initial pose update",
+  "outputs": {
+    "rest": "data/hts_right_20260707_anchor_v4_rest.npy"
+  },
+  "segments": {
+    "rest": {
+      "actual_duration_s": 30.06934617099978,
+      "ended_monotonic_s": 2599.137203555,
+      "estimated_fps": 255.21007195697354,
+      "finite": true,
+      "frame_count": 7674,
+      "name": "right_anchor_rest",
+      "requested_duration_s": 30.0,
+      "started_monotonic_s": 2569.067857384
+    }
+  },
+  "transport": {
+    "host": "0.0.0.0",
+    "mode": "udp",
+    "port": 9000,
+    "timeout_s": 1.0
+  }
+}
