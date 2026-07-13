@@ -1,184 +1,286 @@
-# AnyDexRT Step6 Sparse Anchor Design
+# AnyDexRT Step 6 D1-Mined Anchor Design
 
 ## Goal
 
-Implement AnyDexRT few-shot human guidance for the current TIP-only
-`FK(IK(x))` pipeline. The operator records 50 sparse, per-finger HTS poses.
-The pipeline interpolates them into 750 paired human/robot fingertip anchors
-and trains `L_align` only on the finger identified by each anchor.
+Build AnyDexRT D2 anchors automatically from an existing D1 free-motion HTS
+recording. No live HTS or SAPIEN collection is part of Step 6. The pipeline
+mines five real human poses per finger and motion type, pairs them by level
+with five robot poses sampled across the robot's own feasible range,
+interpolates the pairs, and trains the existing TIP-only mapper with sparse
+finger-indexed alignment.
 
-## Paper Contract
+Step 7 contact auto-labeling is a separate subsystem and will receive its own
+design and implementation plan after Step 6.
 
-The implementation follows AnyDexRT Appendix D:
+## Inputs and Coordinate Contract
 
-- Two anchor types: lateral rotation and bending.
-- `K0=5` sparse human records for each finger and anchor type.
-- Lateral rotation fixes `beta1=beta2=beta3=0` and varies `alpha`.
-- Bending fixes `alpha=0` and uses
-  `beta1=beta2=lambda*beta3`, with `lambda=2`.
-- The four non-thumb fingers sample `beta1` at
-  `[0, pi/8, pi/4, 3*pi/8, pi/2]`.
-- The thumb uses five samples from a feasible pre-generated URDF bending
-  trajectory because its bending parameterization and limits differ.
-- P2 linearly interpolates lateral rotation to `K=50` and bending to
-  `K=100`.
-- P3 generates robot anchors through URDF forward kinematics at matching
-  trajectory parameters.
+The miner accepts one raw HTS NPY with finite shape `[T, 21, 3]`, such as
+`data/hts_right.npy`, plus `--hand-side right|left`. Landmark topology is:
 
-Reference: <https://arxiv.org/html/2607.08341>
+- wrist: 0;
+- thumb: CMC/MCP/IP/TIP at 1/2/3/4;
+- index: MCP/PIP/DIP/TIP at 5/6/7/8;
+- middle: MCP/PIP/DIP/TIP at 9/10/11/12;
+- ring: MCP/PIP/DIP/TIP at 13/14/15/16;
+- pinky: MCP/PIP/DIP/TIP at 17/18/19/20.
 
-## Sparse Collection Order
+The existing capture conversion already stores both hands in GeoRT's common
+right-handed convention. For each frame, the miner still removes residual
+rigid hand motion by constructing a palm frame:
 
-Collection contains exactly 50 records:
+1. origin at the wrist;
+2. longitudinal axis from wrist to middle MCP;
+3. lateral axis from pinky MCP toward index MCP, orthogonalized against the
+   longitudinal axis;
+4. palm normal from the cross product of the lateral and longitudinal axes;
+5. scale from index-MCP to pinky-MCP distance.
 
-1. Finger order: thumb, index, middle, ring, pinky.
-2. For each finger: lateral rotation levels 0 through 4.
-3. For the same finger: bending levels 0 through 4.
+Frames with degenerate axes or palm scale are invalid and excluded. Medoid
+descriptors use palm-frame, palm-scale-normalized landmarks, but the selected
+output is always the untouched real raw frame at its source index.
 
-Each record supervises only its target finger. Although the HTS receiver
-provides all 21 landmarks, collection stores the complete averaged HTS frame
-for diagnostics and records the target finger index explicitly. The final
-training anchors extract only the target TIP.
+## Human Angle Estimation
 
-## Robot Reference Poses
+For index through pinky, let `m` be the wrist-to-MCP metacarpal direction and
+`s1/s2/s3` the MCP-to-PIP, PIP-to-DIP, and DIP-to-TIP segment directions.
+The miner computes:
 
-The four joints in every config finger group are interpreted in existing
-joint order as:
+- `alpha`: signed in-palm azimuth from projected `m` to projected `s1`;
+- `beta1`: signed elevation/flexion of `s1` from the palm plane relative
+  to `m`;
+- `beta2`: flexion angle between `s1` and `s2`;
+- `beta3`: flexion angle between `s2` and `s3`.
 
-1. `alpha`: MCP2 lateral rotation.
-2. `beta1`: MCP1 flexion.
-3. `beta2`: PIP flexion.
-4. `beta3`: DIP flexion.
+Angles use clipped dot products, `atan2`, and explicit finite/segment-length
+validation. Tests use synthetic articulated fingers with known angles and
+rigidly transformed copies to prove palm-frame invariance.
 
-Lateral rotation uniformly samples the active MCP2 URDF limit from lower to
-upper while setting the other three joints to zero clipped into their limits.
+Thumb lateral rotation uses the same signed palm-frame principle with its
+CMC-to-MCP and MCP-to-IP segments. Thumb bending does not use a beta coupling
+model.
 
-For index through pinky, bending sets
-`[alpha, beta1, beta2, beta3] = [0, b, b, b/lambda]` for the five paper
-values, then clips only for floating-point boundary tolerance. A material
-limit violation is an error rather than a silent trajectory change.
+## Candidate Mining
 
-Thumb bending uses a feasible trajectory from the neutral pose to its
-configured flexion upper limits. The five sparse poses are uniformly spaced
-on that trajectory. The exact qpos vectors are saved with collection metadata
-so P1 display and P3 generation use identical references.
+There are two anchor types for every finger.
 
-All non-target joints remain at their neutral value, defined as zero clipped
-to the current URDF limits.
+### Lateral
 
-## Collection Interaction
+Lateral candidates require a nearly extended finger:
 
-`geort/anchor/collect_human_anchors.py` owns the interactive P1 workflow:
+```text
+max(abs(beta1), abs(beta2), abs(beta3)) <= straight_tol
+```
 
-- Build a non-headless SAPIEN hand and start the selected HTS stream.
-- Show the current robot reference qpos continuously.
-- Print record number, target finger, anchor type, level, and a concrete
-  operator instruction in the terminal.
-- Wait for Enter while continuing to refresh the viewer.
-- After Enter, collect a configurable 1.5 second window and average finite
-  HTS frames.
-- Require a configurable minimum number of frames; reject and retry a record
-  if the stream is stale, too short, or non-finite.
-- Save after every accepted record to a partial NPZ plus JSON metadata.
-- Resume only when hand, side, spec version, and task order match exactly.
-- Write the final sparse NPZ after all 50 records; never overwrite a complete
-  collection unless the operator passes an explicit overwrite flag.
+The level parameter is `alpha`. Its asymmetric observed range is preserved;
+the implementation never mirrors or symmetrizes it.
 
-The collector prints instructions in Chinese. Slight imitation offsets are
-accepted, consistent with the paper.
+### Bending
 
-## Data Contracts
+For index through pinky, bending candidates require:
 
-### Sparse P1 output
+```text
+abs(alpha) <= alpha_zero_tol
+max(abs(beta1 - beta2), abs(beta1 - 2 * beta3)) <= coupling_tol
+```
 
-`data/human_anchors_custom_right_sparse.npz` for `custom_right`, or
-`data/human_anchors_custom_left_sparse.npz` for `custom_left`:
+The level parameter is `beta1`. This filter follows the paper's
+`beta1 = beta2 = 2 * beta3` coupling but treats it as a configurable
+observation tolerance rather than forcing raw human poses onto the equation.
 
-- `human_frames`: `[50, 21, 3]` averaged raw HTS frames.
-- `robot_qpos`: `[50, D]` displayed reference qpos.
-- `finger_indices`: `[50]`, values 0 through 4 in TIP order.
-- `anchor_types`: `[50]`, strings `lateral` or `bending`.
-- `levels`: `[50]`, values 0 through 4.
-- `trajectory_t`: `[50]`, normalized values 0 through 1.
-- `frame_counts`: `[50]`, accepted HTS frames per window.
+Default tolerances are:
 
-### Final P2/P3 output
+- `straight_tol_deg=15`;
+- `alpha_zero_tol_deg=10`;
+- `coupling_tol_deg=20`.
 
-`data/anchors_custom_right.npz` for `custom_right`, or
-`data/anchors_custom_left.npz` for `custom_left`:
+If a finger/type has fewer than five candidates, the relevant action
+tolerances are retried with factors `[1.0, 1.5, 2.0, 3.0, 4.0]`. Finite
+validation and robust endpoint clipping are never relaxed. The first factor
+that yields at least five candidates is used and recorded. Exhausting the
+schedule is a hard failure.
 
-- `human_points`: `[750, 3]`, interpolated target human TIPs.
-- `robot_points`: `[750, 3]`, matching exact-URDF target TIPs.
-- `finger_indices`: `[750]`.
-- `anchor_types`: `[750]`.
-- `trajectory_t`: `[750]`.
-- `source_sparse_indices`: `[750, 2]`, neighboring P1 records.
+## Geometric Five-Level Selection
 
-Counts are `5*50=250` lateral anchors plus `5*100=500` bending anchors.
-Interpolation includes both sparse endpoints and preserves exact endpoint
-values.
+Levels are geometric range fractions, not empirical-CDF quantiles:
 
-The prepared manifest `anchors` object records the NPZ filename,
-`normalized: false`, schema version, sparse source, and counts.
+```text
+LEVEL_FRACTIONS = [0.0, 0.25, 0.5, 0.75, 1.0]
+```
+
+For each non-thumb finger/type:
+
+1. compute the candidate level parameter;
+2. use configurable `endpoint_quantiles=[0.02, 0.98]` only to reject tracking
+   outliers and define robust lower/upper endpoints;
+3. place five target values uniformly in angle space between those endpoints;
+4. form a target neighborhood with initial half-width
+   `level_band_fraction=0.025` of the robust range;
+5. expand that half-width by `[1, 2, 4, 8]` until at least
+   `min_level_support=5` candidates are available;
+6. retain at most `max_medoid_candidates=256` frames nearest the target angle
+   so exact medoid computation remains bounded;
+7. choose the candidate minimizing summed Euclidean distance between
+   palm-aligned target-finger landmark descriptors.
+
+The selected values must be monotonic by level. One source frame may not
+represent two levels of the same finger/type; if neighborhoods overlap, the
+next-best unused medoid is selected. Endpoint support counts and every
+neighborhood expansion are reported.
+
+This procedure intentionally ignores dwell-time density around neutral.
+The 25/50/75 percent levels span angle range rather than frame counts.
+
+## Thumb Bending Main Trajectory
+
+Thumb bending uses its palm-aligned, palm-scale-normalized TIP trajectory:
+
+1. reject finite/geometry failures;
+2. remove point outliers using the same configurable 2/98 percent robust
+   projection endpoints;
+3. estimate the dominant one-dimensional trajectory by PCA ordering followed
+   by deterministic local medoids in `thumb_manifold_bins=64` ordered bins;
+4. connect populated bin medoids into a polyline and compute cumulative 3D
+   arc length;
+5. place five targets uniformly at arc fractions
+   `[0, 0.25, 0.5, 0.75, 1]`;
+6. select distinct real source frames through the same bounded local-medoid
+   rule.
+
+The report includes PCA explained variance, populated-bin count, the polyline,
+arc targets, and selected frames. At least five valid populated bins and five
+distinct selected frames are required.
+
+## Human Anchor Output
+
+`geort/anchor/mine_human_anchors.py` writes
+`data/anchors_human_<side>.npz` atomically:
+
+- `human_frames`: `[50, 21, 3]` real raw frames;
+- `human_points`: `[50, 3]` target TIPs from those frames;
+- `source_indices`: `[50]`;
+- `finger_indices`: `[50]`, values 0 through 4;
+- `finger_names`: `[50]`;
+- `anchor_types`: `[50]`, `lateral` or `bending`;
+- `levels`: `[50]`, values 0 through 4;
+- `trajectory_t`: `[50]`, the five level fractions;
+- `target_parameters`: `[50]`;
+- `observed_parameters`: `[50]`;
+- `candidate_counts`: `[50]`;
+- `support_counts`: `[50]`.
+
+Ordering is thumb, index, middle, ring, pinky; within each finger, five
+lateral levels followed by five bending levels. Metadata stores schema
+version, raw filename and SHA-256, side, topology, all effective parameters,
+tolerance fallback history, and source frame indices.
+
+The miner refuses to overwrite outputs unless `--overwrite` is explicit.
+It writes:
+
+- `outputs/anchors/anchors_human_<side>_report.json`;
+- `outputs/anchors/anchors_human_<side>_report.html`.
+
+The HTML report shows per-finger/type candidate histograms, robust endpoints,
+five target and observed values, support counts, fallback history, and 3D
+views of the five selected real hand poses. Plotly is embedded once.
+
+## Robot Five-Level Trajectories
+
+`geort/anchor/anchor_spec.py` defines only level fractions and robot
+trajectories. It contains no fixed human-angle table.
+
+- Lateral: sample the target MCP2 joint from its URDF lower to upper limit at
+  the five level fractions; other target-finger joints remain neutral.
+- Non-thumb bending: find the feasible scalar interval for
+  `[alpha, beta1, beta2, beta3] = [0, b, b, b/2]` by intersecting the URDF
+  limits, then sample that interval at the five level fractions.
+- Thumb bending: densely sample a feasible neutral-to-flexion joint path,
+  evaluate exact URDF FK, compute TIP arc length, and select five qpos values
+  at uniform arc fractions.
+- All non-target joints stay at neutral, defined as zero clipped to the URDF
+  limits.
+
+Human angles are never copied into robot joints. Pairing is exclusively by
+`finger_index`, `anchor_type`, and `level`.
+
+## P2/P3 Generation
+
+`geort/anchor/interpolate.py` remains a generic piecewise-linear
+`[5, D] -> [K, D]` utility because it handles both XYZ and qpos paths.
+
+`geort/anchor/generate_robot_anchors.py`:
+
+1. validates the 50-row mined-human contract;
+2. constructs the matching five robot qpos values for each finger/type;
+3. interpolates human TIP and robot qpos paths to `K=50` lateral or
+   `K=100` bending;
+4. evaluates exact URDF FK for the target robot TIP;
+5. writes `data/anchors_<hand>.npz`;
+6. atomically updates the selected prepared manifest;
+7. writes separate human and robot trajectory panels for visual review.
+
+Final arrays are:
+
+- `human_points`: `[750, 3]`;
+- `robot_points`: `[750, 3]`;
+- `finger_indices`: `[750]`;
+- `anchor_types`: `[750]`;
+- `trajectory_t`: `[750]`;
+- `source_sparse_indices`: `[750, 2]`.
+
+Counts are 250 lateral plus 500 bending rows.
 
 ## Trainer Integration
 
-The prepared-data loader accepts sparse anchor arrays plus
-`finger_indices`. It normalizes each human/robot point using the center and
-scale for that row's finger.
+The prepared-data loader accepts sparse anchor rows plus `finger_indices`
+and normalizes each row with the selected finger's human/robot statistics.
 
-For an anchor batch:
+For each batch it scatters the human point into a zero `[B,5,3]` TIP tensor,
+runs the existing independent per-finger IK plus frozen FK, gathers only the
+target finger, and computes `L_align` against the paired robot point.
 
-1. Create a zero TIP tensor of shape `[B, 5, 3]`.
-2. Scatter each normalized human anchor into its row's target finger.
-3. Run the existing independent per-finger IK networks and frozen FK.
-4. Gather only the mapped target robot TIP.
-5. Compute `anchor_align_loss(gathered_mapped, robot_anchor)`.
+The Step 5 P-Chamfer, distance, and motion losses and their weights remain
+unchanged. `L_align` has weight 1 when anchors are present.
 
-Zero placeholders do not affect the target output because every IK finger MLP
-reads only its own TIP. Non-target mapped outputs are never included in
-`L_align`. The Step5 P-Chamfer, distance, and motion objectives remain
-unchanged and equally weighted; `L_align` is added with weight 1 when
-anchors are present.
+## Removal of the Superseded Workflow
 
-## Generation and Visualization
+The uncommitted live collector and its tests are deleted:
 
-`geort/anchor/interpolate.py` performs deterministic piecewise-linear
-interpolation and exposes pure functions for testing.
+- `geort/anchor/collect_human_anchors.py`;
+- `tests/test_collect_human_anchors.py`.
 
-`geort/anchor/generate_robot_anchors.py` validates the sparse contract,
-generates the 750 paired anchors, updates the selected prepared manifest
-atomically, and prints per-finger/type counts.
+The current fixed-angle human task builder and tests are replaced by the
+robot-only trajectory specification. No SAPIEN viewer, stdin interaction,
+HTS socket, partial progress file, H3 collection, or H4 collection remains
+in Step 6/7.
 
-The generator also writes a lightweight Plotly HTML report containing one
-3D trace pair per finger and anchor type. Human and robot trajectories use
-separate panels because their normalization is per-domain; the report is for
-trajectory direction and ordering, not metric-space overlay.
-
-## Failure Handling
-
-- Reject malformed HTS frames, missing fingers, unexpected task order,
-  non-finite values, duplicate final output, and manifest/config mismatches.
-- Never silently reuse anchors from another hand or URDF config.
-- Refuse interpolation unless every finger/type group has exactly five
-  ordered sparse records.
-- Write manifest changes through a temporary file followed by replacement.
-- Runtime artifacts remain ignored by Git.
-
-## Verification
+## Verification and Acceptance
 
 Automated tests cover:
 
-- Exactly 50 sparse tasks in the defined order.
-- Paper equations and configured joint-limit validation.
-- Thumb trajectory feasibility.
-- Interpolation to 50/100 with exact endpoints.
-- Final 750-row ordering and finger indices.
-- P1 stable-window validation and resumable save contract without HTS/SAPIEN.
-- P3 exact FK target selection and manifest update.
-- Per-finger normalization and sparse gather behavior in trainer.
-- `L_align` affects only the target finger.
+- 21-point topology and palm-frame rigid-transform invariance;
+- synthetic known `alpha/beta` angles;
+- asymmetric robust endpoint extraction;
+- geometric levels differing from empirical-CDF quantiles;
+- distinct real-frame medoids, deterministic tie-breaking, and bounded
+  candidate sets;
+- tolerance relaxation records and hard failure after exhaustion;
+- thumb arc-length levels;
+- exactly 50 ordered sparse human records;
+- robot URDF feasibility and level order;
+- generic 50/100 interpolation and final 750-row ordering;
+- atomic report/output/manifest behavior;
+- sparse finger-indexed trainer normalization and gather behavior.
 
-Manual H3 then runs the collector for the right hand. After generation and
-training, visual acceptance compares trajectory trends and replay behavior
-against the Step5 checkpoint.
+Step 6 mining acceptance requires:
+
+- at least five candidates for every finger/type after recorded fallback;
+- monotonic observed level parameters;
+- five distinct source frames per finger/type;
+- a complete JSON and HTML report for human inspection.
+
+Post-generation acceptance additionally requires correct 750-row counts and
+visually coherent human/robot level ordering. Post-training acceptance remains
+`L_align` decreasing without degrading the other three losses, followed by
+replay showing more stable ambiguous poses than the Step 5 checkpoint.
+
+Human work is report inspection only. There is no data-collection step.
