@@ -12,7 +12,7 @@
 | # | 人工任务 | 发生在 | 耗时 |
 | --- | --- | --- | --- |
 | H1 | 确认 main 基线 checkpoint 与评测报告已存档 | Step 0 | 10 分钟 |
-| H2 | 目视检查人手/机器人局部坐标系可视化方向一致 | Step 4 | 5 分钟 |
+| H2 | 目视检查人手/机器人共享全局坐标系可视化方向一致 | Step 4 | 5 分钟 |
 | H3 | D2 锚点采集（50 次记录，按主计划 2.4 手册） | Step 6 | 10–15 分钟 |
 | H4 | D3 接触标签采集（4 指对正负段，按 2.5 手册） | Step 7 | 10–15 分钟 |
 | H5 | 端到端遥操作实测主观评估 | Step 8 | 30 分钟 |
@@ -61,48 +61,50 @@
 
 **验收**：`grep -rnE "aa_limit|mold|chamfer_target|fist|pinch|segment_direction|loss_weight|weights_path|WeightedRandomSampler|hts_balance|hts_stage3|dataset_manifest" geort/` 无残留（无关词如 pipeline 命中可忽略）；`python geort/env/hand.py --hand custom_right` 正常；trainer 直接读取 raw `.npy`，仅保留 chamfer+direction+curvature。按本轮决策，当前分支不重训，基线复用 `main` 已有 checkpoint。
 
-# Step 2 · 新数据预处理管线
+# Step 2 · 新数据预处理管线（已完成）
 
 **Codex 做什么**
 
-- [ ]  新建 `geort/data/prepare.py`：输入 raw HTS `.npy`，按 config 的 `human_hand_id` 提取逐指指尖 + 指根关键点；实现 AnyDexRT 归一化（逐指中心化 → 最大轴范围各向同性缩放到 $[-1,1]$）；输出 `<name>_prepared.npz` + 精简 manifest JSON（数据路径、逐指 center/scale、预留 anchors/contact 字段）。
-- [ ]  robot 侧同法：对 `generate_robot_kinematics_dataset` 产出的指尖点云计算并保存归一化参数。
-- [ ]  单测 `tests/test_prepare.py`：① 归一化后每指点云 ⊆ [-1,1] 且最大轴恰为 [-1,1]；② 各向同性（三轴同一 scale）；③ 反变换往返误差 < 1e-6。
+- [x]  新建 `geort/data/prepare.py`：输入 raw HTS `.npy`，按 config 的 `human_hand_id` 提取逐指指尖 + 指根关键点；实现 AnyDexRT 归一化（逐指中心化 → 最大轴范围各向同性缩放到 $[-1,1]$）；输出 `<name>_prepared.npz` + 精简 manifest JSON（数据路径、逐指 center/scale、预留 anchors/contact 字段）。
+- [x]  robot 侧同法：对 `generate_robot_kinematics_dataset` 产出的指尖点云计算并保存归一化参数。
+- [x]  单测 `tests/test_prepare.py`：① 归一化后每指点云 ⊆ [-1,1] 且最大轴恰为 [-1,1]；② 各向同性（三轴同一 scale）；③ 反变换往返误差 < 1e-6。
 
 **人工**：无（用旧 raw `hts_right.npy` 验证）。
 
-**验收**：pytest 通过；对旧 raw 跑出 manifest，抽样打印归一化参数合理（scale 量级 ≈ 指尖行程半径，单位米）。
+**验收**：pytest 通过；左右手 raw 均已生成 prepared NPZ + manifest。human scale 为 0.0556–0.0739 m，robot scale 为 0.0623–0.0781 m；逐指最大绝对值为 1，真实数据反变换最大误差 < 1e-8。
 
-# Step 3 · 损失函数重写（`geort/loss.py`）
+# Step 3 · 三项主损失接口（`geort/loss.py`，已完成）
+
+**目标边界**：本步骤定义用于替换旧 chamfer + direction + curvature 组合的三项主损失，不是在旧损失设计上继续叠加。Trainer 中的实际替换在 Step 5 完成。
 
 **Codex 做什么**
 
-- [ ]  `partial_chamfer(mapped_human, robot_cloud)`：只算 human→robot 半边。
-- [ ]  `distance_preservation(points, mapped_points, n_pairs)`：batch 内采样点对，映射前后距离差平方。
-- [ ]  `local_motion_loss(x, fx, dx, dfx, T_human, T_robot)`：局部系内归一化方向负内积。
-- [ ]  `anchor_align_loss(mapped_human_anchor, robot_anchor)`：成对 L2。
-- [ ]  单测 `tests/test_losses.py`（关键行为验证）：① 目标云多出冗余区域时 partial chamfer 不变（对比双向会增大）；② 刚体平移/旋转映射下 L_dist = 0；③ 恒等映射下 L_motion = -1（最优）；④ 锚点完全对齐时 L_align = 0。
+- [x]  `partial_chamfer(mapped_human, robot_cloud)`：只算 human→robot 半边。
+- [x]  `distance_preservation(points, mapped_points, n_pairs)`：batch 内采样点对，映射前后距离差平方。
+- [x]  `motion_direction_loss(x, fx, dx, dfx)`：在共享的右手全局坐标系中计算归一化位移方向负内积，不应用逐指旋转。
+- [x]  `anchor_align_loss(mapped_human_anchor, robot_anchor)`：仅预留给 Step 6 锚点系统；不属于 Step 5 首版的三项主损失。
+- [x]  单测 `tests/test_losses.py`（关键行为验证）：① 目标云多出冗余区域时 partial chamfer 不变（对比双向会增大）；② 刚体平移/旋转映射下 L_dist = 0；③ 恒等映射下 L_motion = -1（最优）；④ 锚点完全对齐时 L_align = 0。
 
 **人工**：无。
 
 **验收**：pytest 通过。
 
-# Step 4 · 局部坐标系模块
+# Step 4 · 共享全局右手坐标系契约（已完成）
 
 **Codex 做什么**
 
-- [ ]  新建 `geort/frames.py`：人手侧从 HTS 指根/掌心关键点构建逐指局部系 $\mathbf{T}(x)$；机器人侧从 URDF 指根 link 位姿取局部系；两侧方向约定写成文档字符串常量。
-- [ ]  可视化脚本 `geort/mocap/visualize_frames.py`：同屏渲染人手关键点+逐指局部系坐标轴 vs 机器人手+指根坐标轴。
+- [x]  新建 `geort/frame_convention.py`：固化双方共享的右手全局坐标约定（+X 掌心外法线、+Y 掌心指向拇指、+Z 掌心指向中指尖）并校验基正交性与行列式；不构建逐指局部系。
+- [x]  可视化脚本 `geort/mocap/visualize_frames.py`：并排渲染 HTS 关键点与 URDF 关键点，每侧只绘制同一套全局 XYZ 轴；只平移显示原点，不旋转数据。
 
-**人工（H2）**：运行可视化，目视确认两侧同名轴方向语义一致（弯曲方向、侧旋方向、指尖外伸方向）。
+**人工（H2，已确认）**：共享全局轴方向目视验收通过。当前报告的机器人侧显示 config 中 10 个 PIP/TIP 监督点（关节限位中点姿态），不作为完整 URDF 外形验收。
 
-**验收**：H2 确认通过；单测：局部系正交性 + 行列式=1。
+**验收**：自动测试已通过：全局基正交且行列式=1、左右手采集共用同一 Unity 左手系→右手系转换、仓库不存在逐指 frame 模块；H2 已确认通过。
 
 # Step 5 · Trainer 重写（首版：三损失，无锚点）
 
 **Codex 做什么**
 
-- [ ]  重写 `trainer.py` 主循环：保留 `FK(IK(x))` 架构（`model.py` 不动）；损失 = P-Chamfer + L_dist + L_motion 等权；扰动机制复用旧 direction loss 骨架但在局部系计算；20 epoch、lr 1e-4、batch 2048。
+- [ ]  重写 `trainer.py` 主循环：保留 `FK(IK(x))` 架构（`model.py` 不动）；删除旧 chamfer + direction + curvature 组合，替换为 P-Chamfer + L_dist + L_motion 三项等权；扰动机制复用旧 direction loss 骨架并在共享全局系计算；20 epoch、lr 1e-4、batch 2048。
 - [ ]  L_align 接口预留：manifest 有 anchors 字段则自动启用（batch 32），无则跳过并警告。
 - [ ]  CLI 精简为：`-hand`、`-human_data`（manifest）、`-ckpt_tag`、`--save_every`。
 - [ ]  checkpoint 写入归一化参数 + 精简 metadata；`geort.load_model` 推理路径同步：归一化 → 映射 → qpos。

@@ -11,8 +11,10 @@ from typing import Callable, Iterable, Literal
 import numpy as np
 
 from geort.utils.path import get_data_root
+from geort.frame_convention import COORDINATE_CONVENTION
 
 EXPECTED_HTS_LANDMARKS = 21
+CAPTURE_COORDINATE_CONVENTION = COORDINATE_CONVENTION
 HandSideName = Literal["left", "right"]
 
 
