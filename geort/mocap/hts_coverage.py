@@ -155,8 +155,8 @@ def save_stage1_report(report: dict, output_path: Path | str) -> Path:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", default="data/hts_right_20260703_quest3_v3.npy", help="Input GeoRT-compatible HTS .npy file.")
-    parser.add_argument("--output", default="data/hts_right_20260703_quest3_v3_stage1_coverage.json", help="Output JSON coverage report.")
+    parser.add_argument("--input", default="data/hts_right.npy", help="Input GeoRT-compatible HTS .npy file.")
+    parser.add_argument("--output", default="data/hts_right_stage1_coverage.json", help="Output JSON coverage report.")
     parser.add_argument("--voxel-size", type=float, default=0.01, help="Voxel size in meters for each of the 6 PIP/TIP axes.")
     parser.add_argument("--max-holes-per-finger", type=int, default=200, help="Maximum local hole candidates to report per finger.")
     parser.add_argument("--neighbor-radius", type=int, default=1, help="Local voxel radius used by axis-bracketed hole detection.")

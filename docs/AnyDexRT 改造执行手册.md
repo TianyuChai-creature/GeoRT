@@ -19,47 +19,47 @@
 
 ---
 
-# Step 0 · 建分支 + 基线留底
+# Step 0 · 建分支 + 基线留底（已完成）
 
 **Codex 做什么**
 
-- [ ]  从 `main` 建分支 `anydexrt`。
-- [ ]  初始化分支 `data/`（从空开始）：拷入已有 raw `.npy` 作 D1（✅ 已决策：直接复用，不重录；左、右手 raw 均可）；**不拷** `*_train.npy`、`*_train.json`、`*_humanshaped.npz`（全部作废）。完整数据清单见主计划 2.0。
-- [ ]  在 `main` 上确认/补跑基线：用现有 raw HTS 数据训练一版旧管线 checkpoint（若 `checkpoint/custom_right_last` 已是最新可跳过），跑 `replay_evaluation.py` 与 `visualize_tip_workspace.py`，产物归档到 `outputs/baseline_main/`。
+- [x]  从 `main` 建分支 `anydexrt`。
+- [x]  初始化分支 `data/`（从空开始）：拷入已有 raw `.npy` 作 D1（✅ 已决策：直接复用，不重录；左、右手 raw 均可）；**不拷** `*_train.npy`、`*_train.json`、`*_humanshaped.npz`（全部作废）。完整数据清单见主计划 2.0。
+- [x]  在 `main` 上确认/补跑基线：用现有 raw HTS 数据训练一版旧管线 checkpoint（若 `checkpoint/custom_right_last` 已是最新可跳过），跑 `replay_evaluation.py` 与 `visualize_tip_workspace.py`，产物归档到 `outputs/baseline_main/`。
 
-**人工（H1）**：确认基线 checkpoint、replay 录屏/报告、workspace HTML 已存档。
+**人工（H1，已确认）**：基线采用 `main` 分支现有 checkpoint；基线 checkpoint、replay 记录与 workspace 报告已归档。
 
 **验收**：`outputs/baseline_main/` 包含 checkpoint 路径记录 + workspace 报告 + replay 结果；分支 `anydexrt` 存在。
 
-# Step 1 · 清除旧补丁（已全仓扫描逐文件核对）
+# Step 1 · 清除旧补丁（已完成）
 
 **Codex 做什么**（在 `anydexrt` 分支）
 
-- [ ]  **整文件删除**（职责全部属于魔改管线，Step 2 的新 `prepare.py` 与新 manifest 整体取代）：
+- [x]  **整文件删除**（职责全部属于魔改管线，Step 2 的新 `prepare.py` 与新 manifest 整体取代）：
     - `geort/mocap/search_custom_aa_limits.py`（AA 限位搜索）
     - `geort/mocap/hts_balance.py`（体素平衡化：`select_balanced_frame_indices`/`build_stage2_report`）
     - `geort/mocap/hts_stage3.py`（接触加权 frame weights：`compute_frame_weights`/`build_stage3_report`）
     - `geort/mocap/hts_prepare_training.py`（平衡化 + **fist boost 重复帧**：`append_fist_boost_frames`、`compute_fist_curl_score`、`compute_mcp_weighted_fist_curl_score` 与全部 `--fist-boost-*` CLI + weights 输出）
     - `geort/training_targets.py`（chamfer 目标选择 + `mold` 机制 + metadata 构建）
     - `geort/dataset_manifest.py`（weights/weights_path/reports/transforms 的 manifest 机制）
-- [ ]  `trainer.py` 同步删除（保持官方 chamfer+direction+curvature 主循环可跑）：
+- [x]  `trainer.py` 同步删除（保持官方 chamfer+direction+curvature 主循环可跑）：
     - 函数：`compute_tip_pinch_loss`、`compute_finger_segment_direction_loss`、`non_thumb_mcp1_joint_indices`、`compute_mcp1_fist_prior_loss`、`compute_mcp1_fist_prior_mask`、`find_human_weight_path`、`describe_human_weight_source`、`resolve_human_training_input`
     - `prepare_human_training_dataset`：weights 加载与 `mcp1_fist_prior_*` 参数全删，`WeightedRandomSampler` 分支改普通 shuffle，输入直接吃 raw `.npy` 路径
     - 主循环：pinch / segment_direction / mcp1_fist_prior 三个损失项与对应打印
     - metadata：`build_training_metadata`/`save_training_metadata` 调用改为写最小 JSON（数据路径 + epoch + 时间戳）
     - CLI：`--w_pinch`、`--pinch_threshold`、`--w_segment_direction`、`--w_mcp1_fist_prior` 与 5 个 `--mcp1_fist_prior_*`、`--chamfer_target`、`--chamfer_target_path`、`--mold_path`
-- [ ]  `visualize_tip_workspace.py` 删 AA 限位相关（保留其余评测功能）：`load_aa_limit_overrides_from_search_report`、`sample_urdf_tip_points` 的 `joint_limit_overrides` 参数、`urdf_baseline_tips`/`_overlap_delta`/HTML 报表 baseline 列、CLI `--aa_limit_search_report`/`--aa_limit_rank`、report 的 `joint_limit_overrides`/`joint_limit_override_source` 字段。
-- [ ]  `dataset.py`：删 `FramePointDataset` 的 `frame_fields` 机制（只为 mcp1 mask 存在），退化为纯点数据集。
-- [ ]  **PIP 监督体系**（扫描确认：不是独立 loss 项，而是 PIP 关键点以 `loss_weight: 0.25` 进入 chamfer/direction/curvature 的关键点加权）：
+- [x]  `visualize_tip_workspace.py` 删 AA 限位相关（保留其余评测功能）：`load_aa_limit_overrides_from_search_report`、`sample_urdf_tip_points` 的 `joint_limit_overrides` 参数、`urdf_baseline_tips`/`_overlap_delta`/HTML 报表 baseline 列、CLI `--aa_limit_search_report`/`--aa_limit_rank`、report 的 `joint_limit_overrides`/`joint_limit_override_source` 字段。
+- [x]  `dataset.py`：删 `FramePointDataset` 的 `frame_fields` 机制（只为 mcp1 mask 存在），退化为纯点数据集。
+- [x]  **PIP 监督体系**（扫描确认：不是独立 loss 项，而是 PIP 关键点以 `loss_weight: 0.25` 进入 chamfer/direction/curvature 的关键点加权）：
     - `trainer.py`：删 `weighted_keypoint_mean` 与 `keypoint_weights`，chamfer/direction/curvature 只对 `tip_indices` 计算、等权
     - `geort/utils/config_utils.py`：删 `parse_config_keypoint_info` 中 `loss_weight`/`weight`、`segment_pairs`、`pinch_pairs` 的解析输出（`pip_indices`/`tip_indices`/`finger_groups` 保留）
     - `custom_right.json` 等 config：删各 keypoint 的 `loss_weight` 字段；PIP 关键点条目本身保留（IK 输入维度与可视化仍用），是否从映射输入中移除在 Step 5 决策
-- [ ]  数据产物停用（不删历史文件）：`data/*_train.npy`/`*_train.json`（平衡集 + weights）、`data/*_humanshaped.npz`（human-shaped 目标云）、`outputs/` 的 AA 搜索报告；分支上训练输入一律回到 raw `.npy`。
-- [ ]  更新 README：删去已移除功能的章节。
+- [x]  数据产物停用（不删历史文件）：`data/*_train.npy`/`*_train.json`（平衡集 + weights）、`data/*_humanshaped.npz`（human-shaped 目标云）、`outputs/` 的 AA 搜索报告；分支上训练输入一律回到 raw `.npy`。
+- [x]  更新 README：删去已移除功能的章节。
 
 **人工**：无（review diff）。
 
-**验收**：`grep -rnE "aa_limit|mold|chamfer_target|fist|pinch|segment_direction|loss_weight|weights_path|WeightedRandomSampler|hts_balance|hts_stage3|dataset_manifest" geort/` 无残留（无关词如 pipeline 命中可忽略）；`python geort/env/hand.py --hand custom_right` 正常；trainer 以 raw `.npy` 为输入、仅 chamfer+direction+curvature 跑通 1 个 epoch（确保分支时刻可运行）。
+**验收**：`grep -rnE "aa_limit|mold|chamfer_target|fist|pinch|segment_direction|loss_weight|weights_path|WeightedRandomSampler|hts_balance|hts_stage3|dataset_manifest" geort/` 无残留（无关词如 pipeline 命中可忽略）；`python geort/env/hand.py --hand custom_right` 正常；trainer 直接读取 raw `.npy`，仅保留 chamfer+direction+curvature。按本轮决策，当前分支不重训，基线复用 `main` 已有 checkpoint。
 
 # Step 2 · 新数据预处理管线
 
@@ -69,7 +69,7 @@
 - [ ]  robot 侧同法：对 `generate_robot_kinematics_dataset` 产出的指尖点云计算并保存归一化参数。
 - [ ]  单测 `tests/test_prepare.py`：① 归一化后每指点云 ⊆ [-1,1] 且最大轴恰为 [-1,1]；② 各向同性（三轴同一 scale）；③ 反变换往返误差 < 1e-6。
 
-**人工**：无（用旧 raw `hts_right_20260703_quest3_v3.npy` 验证）。
+**人工**：无（用旧 raw `hts_right.npy` 验证）。
 
 **验收**：pytest 通过；对旧 raw 跑出 manifest，抽样打印归一化参数合理（scale 量级 ≈ 指尖行程半径，单位米）。
 

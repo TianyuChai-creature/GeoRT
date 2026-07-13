@@ -1,4 +1,4 @@
-"""Collect a Quest3/HTS rest+motion session for GeoRT v3 target clouds."""
+"""Collect a Quest3/HTS rest+motion session."""
 
 from __future__ import annotations
 
@@ -40,11 +40,9 @@ REST_INSTRUCTIONS = """REST segment:
 """
 
 MOTION_INSTRUCTIONS = """MOTION segment:
-1. Per-finger range exploration: flex/extend each finger fully x5, then AA full range x5 while other fingers stay at rest.
-2. Pinch sequence: thumb to index/middle/ring/pinky pinch-release x10 each.
-3. Coordinated actions: large grasp, small grasp, open-close fist cycles.
-4. Sliding actions: slide the thumb along each finger surface from base to tip.
-5. Free task segment: mimic realistic teleoperation tasks.
+- Move each finger through the range needed by the downstream task.
+- Keep the hand centered and visible throughout the recording.
+- Continue until the timed segment ends.
 """
 
 

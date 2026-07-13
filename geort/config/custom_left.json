@@ -40,8 +40,7 @@
             ],
             "human_hand_id": 3,
             "finger": "thumb",
-            "keypoint_type": "pip",
-            "loss_weight": 0.25
+            "keypoint_type": "pip"
         },
         {
             "name": "thumb_tip",
@@ -59,8 +58,7 @@
             ],
             "human_hand_id": 4,
             "finger": "thumb",
-            "keypoint_type": "tip",
-            "loss_weight": 1.0
+            "keypoint_type": "tip"
         },
         {
             "name": "index_pip",
@@ -77,8 +75,7 @@
             ],
             "human_hand_id": 6,
             "finger": "index",
-            "keypoint_type": "pip",
-            "loss_weight": 0.25
+            "keypoint_type": "pip"
         },
         {
             "name": "index_tip",
@@ -96,8 +93,7 @@
             ],
             "human_hand_id": 8,
             "finger": "index",
-            "keypoint_type": "tip",
-            "loss_weight": 1.0
+            "keypoint_type": "tip"
         },
         {
             "name": "middle_pip",
@@ -114,8 +110,7 @@
             ],
             "human_hand_id": 10,
             "finger": "middle",
-            "keypoint_type": "pip",
-            "loss_weight": 0.25
+            "keypoint_type": "pip"
         },
         {
             "name": "middle_tip",
@@ -133,8 +128,7 @@
             ],
             "human_hand_id": 12,
             "finger": "middle",
-            "keypoint_type": "tip",
-            "loss_weight": 1.0
+            "keypoint_type": "tip"
         },
         {
             "name": "ring_pip",
@@ -151,8 +145,7 @@
             ],
             "human_hand_id": 14,
             "finger": "ring",
-            "keypoint_type": "pip",
-            "loss_weight": 0.25
+            "keypoint_type": "pip"
         },
         {
             "name": "ring_tip",
@@ -170,8 +163,7 @@
             ],
             "human_hand_id": 16,
             "finger": "ring",
-            "keypoint_type": "tip",
-            "loss_weight": 1.0
+            "keypoint_type": "tip"
         },
         {
             "name": "pinky_pip",
@@ -188,8 +180,7 @@
             ],
             "human_hand_id": 18,
             "finger": "pinky",
-            "keypoint_type": "pip",
-            "loss_weight": 0.25
+            "keypoint_type": "pip"
         },
         {
             "name": "pinky_tip",
@@ -207,8 +198,7 @@
             ],
             "human_hand_id": 20,
             "finger": "pinky",
-            "keypoint_type": "tip",
-            "loss_weight": 1.0
+            "keypoint_type": "tip"
         }
     ]
 }

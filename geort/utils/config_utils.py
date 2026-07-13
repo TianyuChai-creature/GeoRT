@@ -108,38 +108,6 @@ def _build_finger_groups(keypoint_fingers, keypoint_joints, joint_order):
     return list(groups_by_finger.values())
 
 
-def _build_pinch_pairs(keypoint_fingers, keypoint_types):
-    thumb_tip_indices = [
-        idx for idx, (finger, keypoint_type) in enumerate(zip(keypoint_fingers, keypoint_types))
-        if finger == "thumb" and keypoint_type == "tip"
-    ]
-    if not thumb_tip_indices:
-        return []
-
-    thumb_tip_idx = thumb_tip_indices[0]
-    return [
-        (thumb_tip_idx, idx)
-        for idx, (finger, keypoint_type) in enumerate(zip(keypoint_fingers, keypoint_types))
-        if finger != "thumb" and keypoint_type == "tip"
-    ]
-
-
-def _build_segment_pairs(keypoint_fingers, keypoint_types):
-    pairs = []
-    for finger in dict.fromkeys(keypoint_fingers):
-        pip_indices = [
-            idx for idx, (keypoint_finger, keypoint_type) in enumerate(zip(keypoint_fingers, keypoint_types))
-            if keypoint_finger == finger and keypoint_type == "pip"
-        ]
-        tip_indices = [
-            idx for idx, (keypoint_finger, keypoint_type) in enumerate(zip(keypoint_fingers, keypoint_types))
-            if keypoint_finger == finger and keypoint_type == "tip"
-        ]
-        if pip_indices and tip_indices:
-            pairs.append((pip_indices[0], tip_indices[0]))
-    return pairs
-
-
 def parse_config_keypoint_info(config):
     keypoint_names = []
     keypoint_links = []
@@ -148,7 +116,6 @@ def parse_config_keypoint_info(config):
     keypoint_human_ids = []
     keypoint_fingers = []
     keypoint_types = []
-    keypoint_weights = []
 
     joint_order = config["joint_order"]
 
@@ -156,10 +123,6 @@ def parse_config_keypoint_info(config):
         keypoint_name = info.get("name", info["link"])
         keypoint_type = _infer_keypoint_type(info)
         keypoint_finger = _infer_finger(info, idx)
-        keypoint_weight = info.get(
-            "loss_weight",
-            0.25 if keypoint_type == "pip" else 1.0,
-        )
 
         keypoint_names.append(keypoint_name)
         keypoint_links.append(info["link"])
@@ -167,7 +130,6 @@ def parse_config_keypoint_info(config):
         keypoint_human_ids.append(info['human_hand_id'])
         keypoint_fingers.append(keypoint_finger)
         keypoint_types.append(keypoint_type)
-        keypoint_weights.append(float(keypoint_weight))
         
         keypoint_joint = []
         for joint in info["joint"]:
@@ -186,12 +148,9 @@ def parse_config_keypoint_info(config):
         "human_id": keypoint_human_ids,
         "finger": keypoint_fingers,
         "type": keypoint_types,
-        "weight": keypoint_weights,
         "tip_indices": tip_indices,
         "pip_indices": pip_indices,
         "finger_groups": _build_finger_groups(keypoint_fingers, keypoint_joints, joint_order),
-        "pinch_pairs": _build_pinch_pairs(keypoint_fingers, keypoint_types),
-        "segment_pairs": _build_segment_pairs(keypoint_fingers, keypoint_types),
     }
     return out 
 

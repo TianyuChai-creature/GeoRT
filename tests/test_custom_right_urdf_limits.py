@@ -17,29 +17,29 @@ def _joint_limits(path: Path, joint_names: list[str]) -> dict[str, tuple[str, st
     return out
 
 
-def test_custom_right_four_finger_mcp2_limits_match_quest_effective_search() -> None:
+def test_custom_right_four_finger_mcp2_limits_match_original_mechanical_range() -> None:
     limits = _joint_limits(
         Path("assets/custom_right/URDF_R.urdf"),
         ["F2-R-MCP2", "F3-R-MCP2", "F4-R-MCP2", "F5-R-MCP2"],
     )
 
     assert limits == {
-        "F2-R-MCP2": ("-0.380431", "0.087049"),
-        "F3-R-MCP2": ("-0.242572", "0.204627"),
-        "F4-R-MCP2": ("-0.498692", "0.477526"),
-        "F5-R-MCP2": ("-0.440455", "0.61"),
+        "F2-R-MCP2": ("-0.61", "0.61"),
+        "F3-R-MCP2": ("-0.61", "0.61"),
+        "F4-R-MCP2": ("-0.61", "0.61"),
+        "F5-R-MCP2": ("-0.61", "0.61"),
     }
 
 
-def test_custom_left_four_finger_mcp2_limits_match_quest_effective_search() -> None:
+def test_custom_left_four_finger_mcp2_limits_match_original_mechanical_range() -> None:
     limits = _joint_limits(
         Path("assets/custom_left/URDF_L.urdf"),
         ["F2-L-MCP2", "F3-L-MCP2", "F4-L-MCP2", "F5-L-MCP2"],
     )
 
     assert limits == {
-        "F2-L-MCP2": ("-0.380431", "0.087049"),
-        "F3-L-MCP2": ("-0.242572", "0.204627"),
-        "F4-L-MCP2": ("-0.498692", "0.477526"),
-        "F5-L-MCP2": ("-0.440455", "0.61"),
+        "F2-L-MCP2": ("-0.61", "0.61"),
+        "F3-L-MCP2": ("-0.61", "0.61"),
+        "F4-L-MCP2": ("-0.61", "0.61"),
+        "F5-L-MCP2": ("-0.61", "0.61"),
     }

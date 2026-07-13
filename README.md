@@ -184,36 +184,13 @@ python ./geort/mocap/replay_evaluation.py -hand allegro_right -ckpt_tag YOUR_CKP
 
 ## Runtime Artifacts
 
-The raw acquisition datasets in `data/` are source training assets and stay in the repository. Training and preprocessing derivatives are runtime artifacts: keep generated balanced datasets, frame weights, reports, FK caches, and IK checkpoints under ignored locations such as `data/`, `datasets/<name>/processed/`, `datasets/<name>/reports/`, and `checkpoint/`.
+Raw NPY recordings in data are the training inputs. Generated robot kinematics datasets, FK caches, IK checkpoints, and evaluation reports are runtime artifacts and remain ignored.
 
-For HTS recordings, generate the final training dataset in one step:
+Train directly from an exact raw dataset path:
 
-```bash
-python geort/mocap/hts_prepare_training.py --input data/hts_right_20260703_quest3_v3.npy
-```
+    python ./geort/trainer.py -hand custom_right -human_data data/hts_right.npy
 
-This writes two ignored artifacts next to the raw dataset: `data/hts_right_20260703_quest3_v3_train.npy` and `data/hts_right_20260703_quest3_v3_train.json`. The JSON is the training entry point and carries inline frame weights plus processing summaries:
-
-```json
-{
-  "id": "hts_right_20260703_quest3_v3_train",
-  "data_path": "hts_right_20260703_quest3_v3_train.npy",
-  "weights": [1.0, 3.0],
-  "processing": {
-    "source": "hts_right_20260703_quest3_v3.npy",
-    "raw_frames": 6135,
-    "train_frames": 3200
-  }
-}
-```
-
-Train from the JSON path:
-
-```bash
-python ./geort/trainer.py -hand allegro_right -human_data data/hts_right_train.json
-```
-
-Pass either an exact `.npy` dataset name/path or a training JSON path. Plain `.npy` inputs never auto-load weight sidecars; weights are used only when they are explicit in the JSON. Partial names are rejected so similarly named datasets cannot be confused. By default training writes only `last.pth`; use `--save_every N` when you need periodic `epoch_N.pth` snapshots.
+By default training writes only last.pth; use --save_every N when periodic epoch_N.pth snapshots are required.
 
 ## Custom Right Hand Workspace Evaluation
 
@@ -226,7 +203,7 @@ Generate a layered HTML report comparing human dataset TIP workspaces against UR
 ```
 uv run --python .venv/bin/python python geort/mocap/visualize_tip_workspace.py \
   --hand custom_right \
-  --human_data hts_right_train \
+  --human_data hts_right \
   --samples_per_finger 15000 \
   --alpha 0.08 \
   --surface_max_points 5000 \
@@ -245,49 +222,6 @@ The HTML report contains:
 - a workspace overlap table for thumb-vs-finger and adjacent four-finger pairs.
 
 Overlap is computed by voxelizing TIP workspaces. The table reports IoU plus asymmetric A/B overlap ratios, so it can show cases where one finger's workspace is mostly swallowed by another even when IoU is modest.
-
-### Read-only AA limit search
-
-Search candidate AA limits for the four non-thumb MCP2 joints without modifying the URDF:
-
-```
-uv run --python .venv/bin/python python geort/mocap/search_custom_aa_limits.py \
-  --hand custom_right \
-  --human_data hts_right_train \
-  --num_candidates 50 \
-  --samples_per_finger 2000 \
-  --top_k 10 \
-  --min_width 0.20 \
-  --overlap_voxel_size 0.005 \
-  --output outputs/visualizations/custom_right_aa_limit_search.json
-```
-
-The search optimizes these joints only:
-
-- `F2-R-MCP2`
-- `F3-R-MCP2`
-- `F4-R-MCP2`
-- `F5-R-MCP2`
-
-The objective matches URDF TIP workspace overlap to dataset TIP workspace overlap for adjacent four-finger pairs: `index__middle`, `middle__ring`, and `ring__pinky`. Each candidate in the JSON includes the original limit, candidate limit, and delta for every optimized AA joint. The script only changes limits in memory while sampling FK; it does not write the URDF.
-
-To visualize a candidate from the search report, pass it back into the workspace visualizer and choose fresh output paths:
-
-```
-uv run --python .venv/bin/python python geort/mocap/visualize_tip_workspace.py \
-  --hand custom_right \
-  --human_data hts_right_train \
-  --samples_per_finger 15000 \
-  --alpha 0.08 \
-  --surface_max_points 5000 \
-  --overlap_voxel_size 0.005 \
-  --aa_limit_search_report PATH_TO_AA_LIMIT_SEARCH.json \
-  --aa_limit_rank 1 \
-  --output PATH_TO_WORKSPACE_REPORT.html \
-  --report PATH_TO_WORKSPACE_REPORT.json
-```
-
-This also keeps the URDF unchanged; the candidate AA limits are used only for URDF workspace sampling in that report.
 
 ## Contributing
 Feel free to contribute your robot model and mocap system to the GeoRT repository!

@@ -59,35 +59,6 @@ def compute_saturation_rate(
     }
 
 
-def compute_pinch_failure_rate(
-    human_points: np.ndarray,
-    robot_points: np.ndarray,
-    *,
-    pinch_pairs: list[tuple[int, int]],
-    human_threshold: float = 0.015,
-    robot_threshold: float = 0.025,
-) -> dict[str, Any]:
-    human_points = np.asarray(human_points, dtype=np.float32)
-    robot_points = np.asarray(robot_points, dtype=np.float32)
-    pair_stats = {}
-    max_failure_rate = 0.0
-    for i, j in pinch_pairs:
-        human_dist = np.linalg.norm(human_points[:, i, :] - human_points[:, j, :], axis=1)
-        robot_dist = np.linalg.norm(robot_points[:, i, :] - robot_points[:, j, :], axis=1)
-        contact = human_dist < human_threshold
-        failure = contact & (robot_dist > robot_threshold)
-        contact_frames = int(contact.sum())
-        failure_frames = int(failure.sum())
-        failure_rate = failure_frames / contact_frames if contact_frames else 0.0
-        max_failure_rate = max(max_failure_rate, failure_rate)
-        pair_stats[f"{i}__{j}"] = {
-            "contact_frames": contact_frames,
-            "failure_frames": failure_frames,
-            "failure_rate": float(failure_rate),
-        }
-    return {"pairs": pair_stats, "max_failure_rate": float(max_failure_rate)}
-
-
 def evaluate_baseline_gate(uniform_metrics: dict[str, Any]) -> dict[str, Any]:
     gain_median = float(uniform_metrics.get("signed_gain", {}).get("median", 0.0))
     saturation = uniform_metrics.get("saturation_rate", {})
@@ -110,18 +81,6 @@ def evaluate_baseline_gate(uniform_metrics: dict[str, Any]) -> dict[str, Any]:
         "gain_pathology": False,
         "saturation_pathology": False,
         "rest_pathology": False,
-    }
-
-
-def evaluate_human_acceptance(human_metrics: dict[str, Any], uniform_metrics: dict[str, Any]) -> dict[str, Any]:
-    gain_median = float(human_metrics.get("signed_gain", {}).get("median", 0.0))
-    rest_offset = float(human_metrics.get("rest_offset", {}).get("max_median", 1.0))
-    human_pinch = float(human_metrics.get("pinch_failure_rate", {}).get("max_failure_rate", 1.0))
-    uniform_pinch = float(uniform_metrics.get("pinch_failure_rate", {}).get("max_failure_rate", 1.0))
-    return {
-        "gain_pass": 0.7 <= gain_median <= 1.5,
-        "rest_offset_pass": rest_offset < 0.05,
-        "pinch_pass": human_pinch <= uniform_pinch and human_pinch < 0.2,
     }
 
 

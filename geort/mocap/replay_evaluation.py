@@ -14,7 +14,6 @@ def main():
     parser.add_argument('-hand', type=str, default='allegro_right')
     parser.add_argument('-ckpt_tag', type=str, default='alex')
     parser.add_argument('-data', type=str, default='human')
-    parser.add_argument('--use_weights', action='store_true', help='Replay frames sampled by training JSON weights when provided.')
 
     args = parser.parse_args()
 
@@ -22,7 +21,7 @@ def main():
     model = load_model(args.ckpt_tag)
     
     # Motion Capture.
-    mocap = ReplayMocap(args.data, use_weights=args.use_weights)
+    mocap = ReplayMocap(args.data)
     
     # Robot Simulation.
     config = get_config(args.hand)

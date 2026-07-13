@@ -41,27 +41,6 @@ def test_compute_saturation_rate_splits_lower_and_upper_sides() -> None:
     assert result["any_upper"] == pytest.approx(1 / 3)
 
 
-def test_compute_pinch_failure_rate_counts_human_contacts_that_robot_misses() -> None:
-    human = np.zeros((3, 5, 3), dtype=np.float32)
-    robot = np.zeros((3, 5, 3), dtype=np.float32)
-    # Pair 0-1 contacts in two human frames. Robot misses one of them.
-    human[:, 1, 0] = [0.01, 0.01, 0.03]
-    robot[:, 1, 0] = [0.01, 0.04, 0.04]
-
-    result = metrics.compute_pinch_failure_rate(
-        human,
-        robot,
-        pinch_pairs=[(0, 1)],
-        human_threshold=0.015,
-        robot_threshold=0.025,
-    )
-
-    assert result["pairs"]["0__1"]["contact_frames"] == 2
-    assert result["pairs"]["0__1"]["failure_frames"] == 1
-    assert result["pairs"]["0__1"]["failure_rate"] == 0.5
-    assert result["max_failure_rate"] == 0.5
-
-
 def test_baseline_gate_fails_when_uniform_has_no_pathology() -> None:
     gate = metrics.evaluate_baseline_gate(
         uniform_metrics={

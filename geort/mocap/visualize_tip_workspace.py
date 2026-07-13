@@ -25,23 +25,6 @@ FINGER_COLORS = {
 URDF_COLOR = "#ff7f0e"
 
 
-def load_aa_limit_overrides_from_search_report(report_path: Path | str, *, rank: int = 1) -> dict[str, tuple[float, float]]:
-    """Load candidate AA joint limits from a read-only AA search JSON report."""
-    if rank <= 0:
-        raise ValueError("rank is 1-based and must be positive")
-    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    candidates = report.get("top_candidates", [])
-    if rank > len(candidates):
-        raise ValueError(f"rank {rank} is outside top_candidates length {len(candidates)}")
-
-    comparison = candidates[rank - 1]["limit_comparison"]
-    overrides = {}
-    for joint_name, values in comparison.items():
-        lower, upper = values["candidate"]
-        overrides[joint_name] = (float(lower), float(upper))
-    return overrides
-
-
 def _require_plotly():
     try:
         import plotly.graph_objects as go
@@ -102,7 +85,6 @@ def sample_urdf_tip_points(
     samples_per_finger: int,
     seed: int = 0,
     fixed_qpos_value: float = 0.0,
-    joint_limit_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, np.ndarray]:
     """Sample per-finger URDF TIP workspaces under the current joint limits."""
     if samples_per_finger <= 0:
@@ -111,15 +93,6 @@ def sample_urdf_tip_points(
     hand = HandKinematicModel.build_from_config(config, render=False)
     hand.initialize_keypoint(keypoint_link_names=keypoint_info["link"], keypoint_offsets=keypoint_info["offset"])
     lower, upper = hand.get_joint_limit()
-    if joint_limit_overrides:
-        lower = lower.copy()
-        upper = upper.copy()
-        for joint_name, (candidate_lower, candidate_upper) in joint_limit_overrides.items():
-            if joint_name not in hand.joint_names:
-                raise ValueError(f"Joint override {joint_name} is not in hand joint order")
-            joint_idx = hand.joint_names.index(joint_name)
-            lower[joint_idx] = float(candidate_lower)
-            upper[joint_idx] = float(candidate_upper)
     rng = np.random.default_rng(seed)
 
     tip_index_by_finger = _tip_keypoint_index_by_finger(keypoint_info)
@@ -492,20 +465,11 @@ def _pair_overlap_report(point_clouds: dict[str, np.ndarray], pairs: list[tuple[
     return out
 
 
-def _overlap_delta(current: dict, baseline: dict) -> dict:
-    delta = {}
-    for key in ["iou", "overlap_a_ratio", "overlap_b_ratio"]:
-        delta[key] = float(current.get(key, 0.0) - baseline.get(key, 0.0))
-    delta["intersection_voxels"] = int(current.get("intersection_voxels", 0) - baseline.get("intersection_voxels", 0))
-    return delta
-
-
 def build_workspace_overlap_report(
     dataset_tips: dict[str, np.ndarray],
     urdf_tips: dict[str, np.ndarray],
     *,
     voxel_size: float,
-    urdf_baseline_tips: dict[str, np.ndarray] | None = None,
 ) -> dict:
     dataset_fingers = set(dataset_tips)
     urdf_fingers = set(urdf_tips)
@@ -520,13 +484,6 @@ def build_workspace_overlap_report(
         "dataset": _pair_overlap_report(dataset_tips, pairs, voxel_size=voxel_size),
         "urdf": urdf_overlap,
     }
-    if urdf_baseline_tips is not None:
-        baseline_overlap = _pair_overlap_report(urdf_baseline_tips, pairs, voxel_size=voxel_size)
-        report["urdf_baseline"] = baseline_overlap
-        report["urdf_delta_from_baseline"] = {
-            pair_name: _overlap_delta(urdf_overlap[pair_name], baseline_overlap[pair_name])
-            for pair_name in urdf_overlap
-        }
     return report
 
 def _axis_range(points: np.ndarray) -> list[list[float]]:
@@ -586,70 +543,32 @@ def _format_ratio(value: float) -> str:
     return f"{float(value):.4f}"
 
 
-def _format_delta(value: float) -> str:
-    return f"{float(value):+.4f}"
-
-
-def _format_int_delta(value: int) -> str:
-    return f"{int(value):+d}"
-
-
 def _overlap_table_html(overlap_report: dict | None) -> str:
     if not overlap_report:
         return ""
 
-    has_baseline = "urdf_baseline" in overlap_report
     rows = []
     for finger_a, finger_b in overlap_report.get("pairs", []):
         pair_name = f"{finger_a}__{finger_b}"
         dataset = overlap_report.get("dataset", {}).get(pair_name, {})
         urdf = overlap_report.get("urdf", {}).get(pair_name, {})
-        if has_baseline:
-            baseline = overlap_report.get("urdf_baseline", {}).get(pair_name, {})
-            delta = overlap_report.get("urdf_delta_from_baseline", {}).get(pair_name, {})
-            rows.append(
-                "<tr>"
-                f"<td>{pair_name}</td>"
-                f"<td>{_format_ratio(dataset.get('iou', 0.0))}</td>"
-                f"<td>{_format_ratio(dataset.get('overlap_a_ratio', 0.0))}</td>"
-                f"<td>{_format_ratio(dataset.get('overlap_b_ratio', 0.0))}</td>"
-                f"<td>{int(dataset.get('intersection_voxels', 0))}</td>"
-                f"<td>{_format_ratio(baseline.get('iou', 0.0))}</td>"
-                f"<td>{_format_ratio(urdf.get('iou', 0.0))}</td>"
-                f"<td>{_format_delta(delta.get('iou', 0.0))}</td>"
-                f"<td>{_format_ratio(baseline.get('overlap_a_ratio', 0.0))}</td>"
-                f"<td>{_format_ratio(urdf.get('overlap_a_ratio', 0.0))}</td>"
-                f"<td>{_format_delta(delta.get('overlap_a_ratio', 0.0))}</td>"
-                f"<td>{_format_ratio(baseline.get('overlap_b_ratio', 0.0))}</td>"
-                f"<td>{_format_ratio(urdf.get('overlap_b_ratio', 0.0))}</td>"
-                f"<td>{_format_delta(delta.get('overlap_b_ratio', 0.0))}</td>"
-                f"<td>{int(baseline.get('intersection_voxels', 0))}</td>"
-                f"<td>{int(urdf.get('intersection_voxels', 0))}</td>"
-                f"<td>{_format_int_delta(delta.get('intersection_voxels', 0))}</td>"
-                "</tr>"
-            )
-        else:
-            rows.append(
-                "<tr>"
-                f"<td>{pair_name}</td>"
-                f"<td>{_format_ratio(dataset.get('iou', 0.0))}</td>"
-                f"<td>{_format_ratio(dataset.get('overlap_a_ratio', 0.0))}</td>"
-                f"<td>{_format_ratio(dataset.get('overlap_b_ratio', 0.0))}</td>"
-                f"<td>{int(dataset.get('intersection_voxels', 0))}</td>"
-                f"<td>{_format_ratio(urdf.get('iou', 0.0))}</td>"
-                f"<td>{_format_ratio(urdf.get('overlap_a_ratio', 0.0))}</td>"
-                f"<td>{_format_ratio(urdf.get('overlap_b_ratio', 0.0))}</td>"
-                f"<td>{int(urdf.get('intersection_voxels', 0))}</td>"
-                "</tr>"
-            )
+        rows.append(
+            "<tr>"
+            f"<td>{pair_name}</td>"
+            f"<td>{_format_ratio(dataset.get('iou', 0.0))}</td>"
+            f"<td>{_format_ratio(dataset.get('overlap_a_ratio', 0.0))}</td>"
+            f"<td>{_format_ratio(dataset.get('overlap_b_ratio', 0.0))}</td>"
+            f"<td>{int(dataset.get('intersection_voxels', 0))}</td>"
+            f"<td>{_format_ratio(urdf.get('iou', 0.0))}</td>"
+            f"<td>{_format_ratio(urdf.get('overlap_a_ratio', 0.0))}</td>"
+            f"<td>{_format_ratio(urdf.get('overlap_b_ratio', 0.0))}</td>"
+            f"<td>{int(urdf.get('intersection_voxels', 0))}</td>"
+            "</tr>"
+        )
 
     voxel_size = overlap_report.get("voxel_size", 0.0)
-    if has_baseline:
-        header = "<thead><tr><th>pair</th><th>dataset IoU</th><th>dataset A overlap</th><th>dataset B overlap</th><th>dataset intersect</th><th>original URDF IoU</th><th>current URDF IoU</th><th>IoU delta</th><th>original A overlap</th><th>current A overlap</th><th>A delta</th><th>original B overlap</th><th>current B overlap</th><th>B delta</th><th>original intersect</th><th>current intersect</th><th>intersect delta</th></tr></thead>"
-        note = "Dataset columns are the fixed human capture baseline. Original URDF uses the unmodified limits; current URDF uses the active sampled limits for this report."
-    else:
-        header = "<thead><tr><th>pair</th><th>dataset IoU</th><th>dataset A overlap</th><th>dataset B overlap</th><th>dataset intersect</th><th>urdf IoU</th><th>urdf A overlap</th><th>urdf B overlap</th><th>urdf intersect</th></tr></thead>"
-        note = "Dataset columns are the fixed human capture baseline; URDF columns use the sampled robot limits for this report."
+    header = "<thead><tr><th>pair</th><th>dataset IoU</th><th>dataset A overlap</th><th>dataset B overlap</th><th>dataset intersect</th><th>urdf IoU</th><th>urdf A overlap</th><th>urdf B overlap</th><th>urdf intersect</th></tr></thead>"
+    note = "Dataset columns use captured human data; URDF columns use the active robot limits."
     return "\n".join(
         [
             "<section class='report-section'>",
@@ -716,15 +635,9 @@ def _resolve_output(path: str) -> Path:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hand", default="custom_right", help="GeoRT hand config name.")
-    parser.add_argument("--human_data", default="hts_right_train", help="Dataset name or .npy path under data/.")
+    parser.add_argument("--human_data", default="hts_right", help="Dataset name or .npy path under data/.")
     parser.add_argument("--samples_per_finger", type=int, default=15000, help="URDF FK samples per finger.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for URDF workspace sampling.")
-    parser.add_argument(
-        "--aa_limit_search_report",
-        default=None,
-        help="Optional AA limit search JSON. If set, URDF workspace sampling uses the candidate at --aa_limit_rank without writing the URDF.",
-    )
-    parser.add_argument("--aa_limit_rank", type=int, default=1, help="1-based candidate rank from --aa_limit_search_report.")
     parser.add_argument(
         "--include_alpha_surface",
         action=argparse.BooleanOptionalAction,
@@ -764,26 +677,11 @@ def main() -> None:
     frames = np.load(get_human_data(args.human_data))
 
     dataset_tips = extract_dataset_tip_points(frames, keypoint_info)
-    joint_limit_overrides = None
-    if args.aa_limit_search_report:
-        joint_limit_overrides = load_aa_limit_overrides_from_search_report(
-            _resolve_output(args.aa_limit_search_report),
-            rank=args.aa_limit_rank,
-        )
-    urdf_baseline_tips = None
-    if joint_limit_overrides:
-        urdf_baseline_tips = sample_urdf_tip_points(
-            config,
-            keypoint_info,
-            samples_per_finger=args.samples_per_finger,
-            seed=args.seed,
-        )
     urdf_tips = sample_urdf_tip_points(
         config,
         keypoint_info,
         samples_per_finger=args.samples_per_finger,
         seed=args.seed,
-        joint_limit_overrides=joint_limit_overrides,
     )
     figures = build_layered_tip_workspace_figures(
         dataset_tips,
@@ -798,7 +696,6 @@ def main() -> None:
         dataset_tips,
         urdf_tips,
         voxel_size=args.overlap_voxel_size,
-        urdf_baseline_tips=urdf_baseline_tips,
     )
     report["alpha_surface"] = {
         "enabled": bool(args.include_alpha_surface),
@@ -806,15 +703,6 @@ def main() -> None:
         "surface_max_points": int(args.surface_max_points),
     }
     report["overlap_voxel_size"] = float(args.overlap_voxel_size)
-    if joint_limit_overrides:
-        report["joint_limit_overrides"] = {
-            joint_name: [float(lower), float(upper)]
-            for joint_name, (lower, upper) in joint_limit_overrides.items()
-        }
-        report["joint_limit_override_source"] = {
-            "search_report": str(_resolve_output(args.aa_limit_search_report)),
-            "rank": int(args.aa_limit_rank),
-        }
 
     html_path = write_layered_html(figures, _resolve_output(args.output), overlap_report=report["overlap"])
     report_path = save_report(report, _resolve_output(args.report))
@@ -822,10 +710,6 @@ def main() -> None:
     print(f"TIP workspace report saved to {report_path}")
     if args.include_alpha_surface:
         print(f"Alpha surface traces included with alpha={args.alpha} surface_max_points={args.surface_max_points}")
-    if joint_limit_overrides:
-        print(f"Using AA limit overrides from {args.aa_limit_search_report} rank={args.aa_limit_rank}")
-        for joint_name, limits in joint_limit_overrides.items():
-            print(f"  {joint_name}: {list(limits)}")
     print(f"Overlap voxel size={args.overlap_voxel_size}")
     for pair_name, stats in report["overlap"]["dataset"].items():
         urdf_stats = report["overlap"]["urdf"][pair_name]
