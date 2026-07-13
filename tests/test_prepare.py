@@ -97,12 +97,12 @@ def test_prepare_dataset_writes_compact_npz_and_manifest(tmp_path: Path) -> None
     )
 
     prepared = np.load(output_path)
-    assert prepared["human_points"].shape == (2, 4, 3)
-    assert prepared["robot_points"].shape == (2, 4, 3)
-    assert prepared["keypoint_names"].tolist() == [
-        "thumb_pip", "thumb_tip", "index_pip", "index_tip"
-    ]
+    assert prepared["human_points"].shape == (2, 2, 3)
+    assert prepared["robot_points"].shape == (2, 2, 3)
+    assert prepared["keypoint_names"].tolist() == ["thumb_tip", "index_tip"]
     manifest = json.loads(manifest_path.read_text())
+    assert prepared["human_ids"].tolist() == [1, 3]
+    assert manifest["keypoint_names"] == ["thumb_tip", "index_tip"]
     assert manifest["prepared_data"] == output_path.name
     assert manifest["anchors"] is None
     assert manifest["contact"] is None

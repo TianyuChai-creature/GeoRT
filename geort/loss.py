@@ -49,11 +49,11 @@ def _validate_point_clouds(*point_clouds):
 
 
 def partial_chamfer(mapped_human, robot_cloud):
-    """Return the one-sided squared Chamfer distance from human to robot."""
+    """Return the one-sided L2 Chamfer distance from human to robot."""
     _validate_point_clouds(mapped_human, robot_cloud)
     if mapped_human.shape[0] != robot_cloud.shape[0]:
         raise ValueError("Point cloud batch sizes must match")
-    distances = torch.cdist(mapped_human, robot_cloud).square()
+    distances = torch.cdist(mapped_human, robot_cloud)
     return distances.min(dim=-1).values.mean()
 
 
@@ -65,14 +65,17 @@ def distance_preservation(points, mapped_points, n_pairs):
     if n_pairs <= 0:
         raise ValueError("n_pairs must be positive")
 
-    n_points = points.shape[1]
-    first = torch.randint(n_points, (n_pairs,), device=points.device)
-    second = torch.randint(n_points, (n_pairs,), device=points.device)
+    batch_size = points.shape[0]
+    if batch_size < 2:
+        raise ValueError("distance_preservation requires at least two samples")
+    first = torch.randint(batch_size, (n_pairs,), device=points.device)
+    offset = torch.randint(1, batch_size, (n_pairs,), device=points.device)
+    second = (first + offset) % batch_size
     source_distance = torch.linalg.vector_norm(
-        points[:, first] - points[:, second], dim=-1
+        points[first] - points[second], dim=-1
     )
     mapped_distance = torch.linalg.vector_norm(
-        mapped_points[:, first] - mapped_points[:, second], dim=-1
+        mapped_points[first] - mapped_points[second], dim=-1
     )
     return (source_distance - mapped_distance).square().mean()
 

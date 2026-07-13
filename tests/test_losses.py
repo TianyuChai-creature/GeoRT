@@ -24,7 +24,7 @@ def test_partial_chamfer_ignores_unused_target_regions() -> None:
 
 def test_distance_preservation_is_zero_for_rigid_transform() -> None:
     points = torch.tensor(
-        [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.0]]]
+        [[[0.0, 0.0, 0.0]], [[1.0, 0.0, 0.0]], [[0.0, 2.0, 0.0]]]
     )
     rotation = torch.tensor(
         [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
@@ -50,3 +50,19 @@ def test_anchor_align_loss_is_zero_for_matching_anchors() -> None:
     anchors = torch.randn(4, 5, 3)
 
     assert _loss("anchor_align_loss")(anchors, anchors).item() == 0.0
+
+
+def test_partial_chamfer_uses_l2_distance_not_squared_distance() -> None:
+    mapped = torch.tensor([[[0.0, 0.0, 0.0]]])
+    target = torch.tensor([[[3.0, 4.0, 0.0]]])
+
+    assert _loss("partial_chamfer")(mapped, target).item() == 5.0
+
+
+def test_distance_preservation_samples_different_batch_items() -> None:
+    points = torch.tensor([[[0.0, 0.0, 0.0]], [[2.0, 0.0, 0.0]]])
+    collapsed = torch.zeros_like(points)
+
+    loss = _loss("distance_preservation")(points, collapsed, n_pairs=8)
+
+    assert loss.item() == 4.0

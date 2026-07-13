@@ -138,10 +138,11 @@ def prepare_dataset(
     output_path = Path(output_path)
     manifest_path = Path(manifest_path)
     info = parse_config_keypoint_info(config)
-    keypoint_names = info["name"]
-    keypoint_links = info["link"]
-    finger_names = info["finger"]
-    human_ids = info["human_id"]
+    tip_indices = info["tip_indices"]
+    keypoint_names = [info["name"][idx] for idx in tip_indices]
+    keypoint_links = [info["link"][idx] for idx in tip_indices]
+    finger_names = [info["finger"][idx] for idx in tip_indices]
+    human_ids = [info["human_id"][idx] for idx in tip_indices]
 
     human_frames = np.load(human_path, mmap_mode="r")
     if human_frames.ndim != 3 or human_frames.shape[-1] < 3:

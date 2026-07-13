@@ -38,7 +38,8 @@ The legacy conda flow may still work, but use Python 3.12 and `sapien>=3.0.0` if
 Upon completion, you will be able to train GeoRT and deploy the checkpoint in a clean and straightforward way. 
 ### Training (1-2min):
 ```
-python ./geort/trainer.py -hand allegro_right -human_data human -ckpt_tag geort_1
+python -m geort.data.prepare --hand allegro_right --human-data human
+python -m geort.trainer -hand allegro_right -human_data human_prepared -ckpt_tag geort_1
 ```
 ### Deploy in code
 ```
@@ -134,14 +135,15 @@ to generate a dataset named ``human``. Refered to the file for instructions. Whe
 
 **Note:** Please ensure that the hand frame orientation is consistent between your motion capture system and the hand URDF (but fortunately the origin does not require any alignment and you can just set it to palm center). In our provided mocap example, we support the **right** hand using the following convention:+Y axis: from the palm center to the thumb. +Z axis: from the palm center to the middle fingertip. +X axis: palm normal (pointing out of the palm). 
 
-### Step 3: Train the Model
-Assuming you have placed ``your_robot_name.json`` in the ``geort/config`` folder as described in Step 1, and set ``data_output_name`` to ``human`` in Step 2, run the following command. TAG is the checkpoint id to use in later deployment.
+### Step 3: Prepare and Train the Model
+Assuming you have placed ``your_robot_name.json`` in the ``geort/config`` folder as described in Step 1, first prepare the raw recording, then train from its generated manifest. TAG is the checkpoint id to use in later deployment.
 
 ```
-python ./geort/trainer.py -hand your_robot_name -human_data human -ckpt_tag TAG
+python -m geort.data.prepare --hand your_robot_name --human-data human
+python -m geort.trainer -hand your_robot_name -human_data human_prepared -ckpt_tag TAG
 ```
 
-Let it train for about 30–50 epochs (approximately 1–2 minutes). You can press Ctrl+C to stop early if you wish. 
+Training runs for 20 epochs with the Step 5 AnyDexRT objective.
 
 If this is the first time you’re training for a new hand, an additional 5 minutes will be needed to train the neural FK model — this only happens once.
 In the command above, 
@@ -149,7 +151,8 @@ In the command above,
 For adapting a freshly collected dataset named ``human`` to a right Allegro hand, run:
 
 ```
-python ./geort/trainer.py -hand allegro_right -human_data human -ckpt_tag geort_1
+python -m geort.data.prepare --hand allegro_right --human-data human
+python -m geort.trainer -hand allegro_right -human_data human_prepared -ckpt_tag geort_1
 ```
 This will generate a checkpoint named ``geort_1``. Later you can call ``model = geort.load_model('geort_1')`` to use it in your code.
 

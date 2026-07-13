@@ -21,4 +21,6 @@ class HandFormatter:
         return (x / 2 + 0.5) * (self.joint_upper_limit - self.joint_lower_limit) + self.joint_lower_limit
 
     def normalize_torch(self, x):
-        return ((x - torch.from_numpy(self.joint_lower_limit).cuda()) / (torch.from_numpy(self.joint_upper_limit).cuda() - torch.from_numpy(self.joint_lower_limit).cuda()) - 0.5) * 2
+        lower = torch.as_tensor(self.joint_lower_limit, device=x.device, dtype=x.dtype)
+        upper = torch.as_tensor(self.joint_upper_limit, device=x.device, dtype=x.dtype)
+        return ((x - lower) / (upper - lower) - 0.5) * 2

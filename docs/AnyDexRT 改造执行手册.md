@@ -53,7 +53,7 @@
 - [x]  **PIP 监督体系**（扫描确认：不是独立 loss 项，而是 PIP 关键点以 `loss_weight: 0.25` 进入 chamfer/direction/curvature 的关键点加权）：
     - `trainer.py`：删 `weighted_keypoint_mean` 与 `keypoint_weights`，chamfer/direction/curvature 只对 `tip_indices` 计算、等权
     - `geort/utils/config_utils.py`：删 `parse_config_keypoint_info` 中 `loss_weight`/`weight`、`segment_pairs`、`pinch_pairs` 的解析输出（`pip_indices`/`tip_indices`/`finger_groups` 保留）
-    - `custom_right.json` 等 config：删各 keypoint 的 `loss_weight` 字段；PIP 关键点条目本身保留（IK 输入维度与可视化仍用），是否从映射输入中移除在 Step 5 决策
+    - `custom_right.json` 等 config：删各 keypoint 的 `loss_weight` 字段；PIP 条目仅为兼容既有 FK 模型和关键点可视化而保留，不进入 prepared 数据、IK 映射输入、Step 5 损失或推理路径
 - [x]  数据产物停用（不删历史文件）：`data/*_train.npy`/`*_train.json`（平衡集 + weights）、`data/*_humanshaped.npz`（human-shaped 目标云）、`outputs/` 的 AA 搜索报告；分支上训练输入一律回到 raw `.npy`。
 - [x]  更新 README：删去已移除功能的章节。
 
@@ -65,7 +65,7 @@
 
 **Codex 做什么**
 
-- [x]  新建 `geort/data/prepare.py`：输入 raw HTS `.npy`，按 config 的 `human_hand_id` 提取逐指指尖 + 指根关键点；实现 AnyDexRT 归一化（逐指中心化 → 最大轴范围各向同性缩放到 $[-1,1]$）；输出 `<name>_prepared.npz` + 精简 manifest JSON（数据路径、逐指 center/scale、预留 anchors/contact 字段）。
+- [x]  新建 `geort/data/prepare.py`：输入 raw HTS `.npy`，按 config 的 `tip_indices` 与 `human_hand_id` 只提取五个逐指 TIP；实现 AnyDexRT 归一化（逐 TIP 工作空间中心化 → 最大轴范围各向同性缩放到 $[-1,1]$）；输出 `<name>_prepared.npz` + 精简 manifest JSON（数据路径、逐 TIP center/scale、预留 anchors/contact 字段）。
 - [x]  robot 侧同法：对 `generate_robot_kinematics_dataset` 产出的指尖点云计算并保存归一化参数。
 - [x]  单测 `tests/test_prepare.py`：① 归一化后每指点云 ⊆ [-1,1] 且最大轴恰为 [-1,1]；② 各向同性（三轴同一 scale）；③ 反变换往返误差 < 1e-6。
 
@@ -79,8 +79,8 @@
 
 **Codex 做什么**
 
-- [x]  `partial_chamfer(mapped_human, robot_cloud)`：只算 human→robot 半边。
-- [x]  `distance_preservation(points, mapped_points, n_pairs)`：batch 内采样点对，映射前后距离差平方。
+- [x]  `partial_chamfer(mapped_human, robot_cloud)`：使用 L2 距离，只算 human→robot 半边。
+- [x]  `distance_preservation(points, mapped_points, n_pairs)`：在 batch 样本间采样非自身点对，逐 TIP 比较映射前后距离差平方。
 - [x]  `motion_direction_loss(x, fx, dx, dfx)`：在共享的右手全局坐标系中计算归一化位移方向负内积，不应用逐指旋转。
 - [x]  `anchor_align_loss(mapped_human_anchor, robot_anchor)`：仅预留给 Step 6 锚点系统；不属于 Step 5 首版的三项主损失。
 - [x]  单测 `tests/test_losses.py`（关键行为验证）：① 目标云多出冗余区域时 partial chamfer 不变（对比双向会增大）；② 刚体平移/旋转映射下 L_dist = 0；③ 恒等映射下 L_motion = -1（最优）；④ 锚点完全对齐时 L_align = 0。
@@ -100,18 +100,40 @@
 
 **验收**：自动测试已通过：全局基正交且行列式=1、左右手采集共用同一 Unity 左手系→右手系转换、仓库不存在逐指 frame 模块；H2 已确认通过。
 
-# Step 5 · Trainer 重写（首版：三损失，无锚点）
+# Step 5 · Trainer 重写（已完成）
 
 **Codex 做什么**
 
-- [ ]  重写 `trainer.py` 主循环：保留 `FK(IK(x))` 架构（`model.py` 不动）；删除旧 chamfer + direction + curvature 组合，替换为 P-Chamfer + L_dist + L_motion 三项等权；扰动机制复用旧 direction loss 骨架并在共享全局系计算；20 epoch、lr 1e-4、batch 2048。
-- [ ]  L_align 接口预留：manifest 有 anchors 字段则自动启用（batch 32），无则跳过并警告。
-- [ ]  CLI 精简为：`-hand`、`-human_data`（manifest）、`-ckpt_tag`、`--save_every`。
-- [ ]  checkpoint 写入归一化参数 + 精简 metadata；`geort.load_model` 推理路径同步：归一化 → 映射 → qpos。
+- [x]  重写 `trainer.py` 主循环：保留 `FK(IK(x))` 架构（`model.py` 不动）；删除旧 chamfer + direction + curvature 组合，替换为 TIP-only P-Chamfer + L_dist + L_motion 三项等权；扰动机制复用旧 direction loss 骨架并在共享全局系计算；20 epoch、lr 1e-4、batch 2048。
+- [x]  L_align 接口预留：manifest 有 anchors 字段则自动启用（batch 32），无则跳过并警告。
+- [x]  CLI 精简为：`-hand`、`-human_data`（manifest）、`-ckpt_tag`、`--save_every`。
+- [x]  checkpoint 写入 TIP 选择、归一化参数、精简 metadata 与逐 epoch history；`geort.load_model` 推理路径同步：raw HTS → 选择五个 TIP → 归一化 → 映射 → qpos，并兼容无 normalization 文件的旧 checkpoint。
 
 **人工**：无。
 
-**验收**：用旧 raw 准备的 manifest 训练跑通 20 epoch，三项损失均下降且末期稳定；`replay_evaluation.py` 回放目视无坍缩/翻转异常；`visualize_tip_workspace.py` 中映射后人手云落在机器人 TIP 空间内且分布自然（无被冗余区拉扯的形变）。
+**自动验收结果（右手）**：`hts_right_prepared` 已完成 20 epoch 正式训练，checkpoint 为 `checkpoint/custom_right_2026-07-13_14-02-28_anydexrt_step5`。L_dist 从 0.0808 降至 0.0347，L_motion 从 -0.4913 降至 -0.9239；P-Chamfer 约 0.044–0.045，未满足“持续下降”。固定样本对比中，随机初始化/训练后 P-Chamfer 分别为 0.0343/0.0345，而 L_dist 为 0.7219/0.0452、L_motion 为 0.0443/-0.8901。这说明在保留 `FK(IK(x))` 的当前架构中，随机 IK 输出已经位于机器人可达云，单向 P-Chamfer 接近可行域下限，难以提供有效梯度；这是相对原论文直接 TIP→TIP 映射的结构差异，不能记为“三项损失均下降”。
+
+**待人工验收**：运行下列命令。回放检查无坍缩/翻转；workspace 报告中的 `Mapped` 云是 raw HTS 经 checkpoint 与精确 URDF FK 后得到的 TIP 云，应落在橙色 URDF 可达空间内且分布自然。HTML 默认关闭 alpha surface，仅保留 3D 点云，以控制文件大小和 WebGL 显存占用。
+
+```bash
+GEORT_PYTHON=/home/creature/Desktop/GeoRT/.venv/bin/python
+
+PYTHONPATH=. "$GEORT_PYTHON" -m geort.mocap.replay_evaluation \
+  -hand custom_right \
+  -ckpt_tag custom_right_2026-07-13_14-02-28_anydexrt_step5 \
+  -data hts_right
+
+PYTHONPATH=. "$GEORT_PYTHON" -m geort.mocap.visualize_tip_workspace \
+  --hand custom_right \
+  --human_data hts_right \
+  --ckpt_tag custom_right_2026-07-13_14-02-28_anydexrt_step5 \
+  --mapped_max_frames 5000 \
+  --no-include_alpha_surface \
+  --output outputs/visualizations/custom_right_anydexrt_step5_mapped.html \
+  --report outputs/visualizations/custom_right_anydexrt_step5_mapped_report.json
+```
+
+**人工验收已通过**：replay 无坍缩/翻转，workspace 映射云分布可接受。P-Chamfer 的结构性弱约束作为后续架构决策依据记录，不在本步骤擅自改动手册要求的 `FK(IK)` 架构。
 
 # Step 6 · 锚点系统（D2）
 

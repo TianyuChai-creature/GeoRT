@@ -159,3 +159,22 @@ def parse_config_joint_limit(config):
     lower_limit = config["joint"]["lower"]
     upper_limit = config["joint"]["upper"]
     return np.array(lower_limit), np.array(upper_limit)
+
+
+def build_tip_finger_groups(keypoint_info):
+    """Build one TIP input per finger while preserving each finger joint block."""
+    groups_by_finger = {
+        group["finger"]: group for group in keypoint_info["finger_groups"]
+    }
+    groups = []
+    for tip_position, keypoint_idx in enumerate(keypoint_info["tip_indices"]):
+        finger = keypoint_info["finger"][keypoint_idx]
+        source_group = groups_by_finger[finger]
+        groups.append(
+            {
+                "finger": finger,
+                "keypoint_indices": [tip_position],
+                "joint_indices": list(source_group["joint_indices"]),
+            }
+        )
+    return groups

@@ -10,6 +10,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from geort.env.hand import HandKinematicModel
+from geort.export import load_model
 from geort.utils.config_utils import get_config, parse_config_keypoint_info
 from geort.utils.path import get_human_data, to_package_root
 
@@ -62,6 +63,43 @@ def extract_dataset_tip_points(frames: np.ndarray, keypoint_info: dict) -> dict[
             raise ValueError(f"Human landmark id {human_id} for {finger} tip is outside frame shape {frames.shape}")
         tips[finger] = _as_point_cloud(frames[:, human_id, :], name=f"dataset_{finger}_tip")
     return _sort_fingers(tips)
+
+
+def map_dataset_tip_points(
+    frames: np.ndarray,
+    keypoint_info: dict,
+    *,
+    retargeting_model,
+    hand: HandKinematicModel,
+    max_frames: int,
+) -> dict[str, np.ndarray]:
+    """Map raw hand frames through a checkpoint and exact URDF forward kinematics."""
+    frames = np.asarray(frames, dtype=np.float32)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"Expected frames with shape [T, N, 3], got {frames.shape}")
+    if len(frames) == 0:
+        raise ValueError("frames must not be empty")
+    if max_frames <= 0:
+        raise ValueError("max_frames must be positive")
+
+    hand.initialize_keypoint(
+        keypoint_link_names=keypoint_info["link"],
+        keypoint_offsets=keypoint_info["offset"],
+    )
+    tip_index_by_finger = _tip_keypoint_index_by_finger(keypoint_info)
+    frame_count = min(max_frames, len(frames))
+    frame_indices = np.linspace(0, len(frames) - 1, frame_count, dtype=np.int64)
+    tips: dict[str, list[np.ndarray]] = {
+        finger: [] for finger in tip_index_by_finger
+    }
+    for frame_index in frame_indices:
+        qpos = retargeting_model.forward(frames[frame_index])
+        keypoints = hand.keypoint_from_qpos(qpos, ret_vec=True)
+        for finger, tip_index in tip_index_by_finger.items():
+            tips[finger].append(np.asarray(keypoints[tip_index], dtype=np.float32))
+    return _sort_fingers(
+        {finger: np.stack(points, axis=0) for finger, points in tips.items()}
+    )
 
 
 def _sort_fingers(point_clouds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -262,6 +300,7 @@ def build_layered_tip_workspace_figures(
     dataset_tips: dict[str, np.ndarray],
     urdf_tips: dict[str, np.ndarray],
     *,
+    source_label: str = "Dataset",
     include_alpha_surface: bool = False,
     alpha: float = 0.03,
     surface_max_points: int = 2000,
@@ -270,6 +309,7 @@ def build_layered_tip_workspace_figures(
     """Build layered Plotly figures for single-finger, all-human, all-URDF, and overview views."""
     dataset_tips = _sort_fingers(dataset_tips)
     urdf_tips = _sort_fingers(urdf_tips)
+    source_name = source_label.lower()
     fingers = [finger for finger in FINGER_ORDER if finger in dataset_tips and finger in urdf_tips]
     fingers.extend(
         finger for finger in sorted(set(dataset_tips) & set(urdf_tips))
@@ -321,7 +361,7 @@ def build_layered_tip_workspace_figures(
         traces.extend(
             traces_for(
                 dataset_tips[finger],
-                name=f"dataset_{finger}_tip",
+                name=f"{source_name}_{finger}_tip",
                 point_color=FINGER_COLORS.get(finger, "#1f77b4"),
                 point_opacity=0.65,
                 surface_color=FINGER_COLORS.get(finger, "#1f77b4"),
@@ -338,21 +378,25 @@ def build_layered_tip_workspace_figures(
                 surface_opacity=0.16,
             )
         )
-        figures[f"single_{finger}"] = _figure(f"{finger} TIP workspace: dataset vs URDF", traces)
+        figures[f"single_{finger}"] = _figure(
+            f"{finger} TIP workspace: {source_label} vs URDF", traces
+        )
 
     dataset_all_traces = []
     for finger in dataset_tips:
         dataset_all_traces.extend(
             traces_for(
                 dataset_tips[finger],
-                name=f"dataset_{finger}_tip",
+                name=f"{source_name}_{finger}_tip",
                 point_color=FINGER_COLORS.get(finger, "#1f77b4"),
                 point_opacity=0.65,
                 surface_color=FINGER_COLORS.get(finger, "#1f77b4"),
                 surface_opacity=0.20,
             )
         )
-    figures["dataset_all"] = _figure("Dataset TIP workspace: all fingers", dataset_all_traces)
+    figures["dataset_all"] = _figure(
+        f"{source_label} TIP workspace: all fingers", dataset_all_traces
+    )
 
     urdf_all_traces = []
     for finger in urdf_tips:
@@ -373,7 +417,7 @@ def build_layered_tip_workspace_figures(
         overview_traces.extend(
             traces_for(
                 dataset_tips[finger],
-                name=f"dataset_{finger}_tip",
+                name=f"{source_name}_{finger}_tip",
                 point_color=FINGER_COLORS.get(finger, "#1f77b4"),
                 point_opacity=0.55,
                 surface_color=FINGER_COLORS.get(finger, "#1f77b4"),
@@ -391,7 +435,9 @@ def build_layered_tip_workspace_figures(
                 surface_opacity=0.10,
             )
         )
-    figures["overview_all"] = _figure("TIP workspace overview: dataset and URDF", overview_traces)
+    figures["overview_all"] = _figure(
+        f"TIP workspace overview: {source_label} and URDF", overview_traces
+    )
     return figures
 
 
@@ -636,6 +682,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hand", default="custom_right", help="GeoRT hand config name.")
     parser.add_argument("--human_data", default="hts_right", help="Dataset name or .npy path under data/.")
+    parser.add_argument(
+        "--ckpt_tag",
+        default=None,
+        help="Checkpoint tag/path. When set, visualize checkpoint-mapped URDF TIPs instead of raw HTS TIPs.",
+    )
+    parser.add_argument(
+        "--mapped_max_frames",
+        type=int,
+        default=5000,
+        help="Maximum uniformly sampled HTS frames mapped through the checkpoint.",
+    )
     parser.add_argument("--samples_per_finger", type=int, default=15000, help="URDF FK samples per finger.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for URDF workspace sampling.")
     parser.add_argument(
@@ -676,7 +733,27 @@ def main() -> None:
     keypoint_info = parse_config_keypoint_info(config)
     frames = np.load(get_human_data(args.human_data))
 
-    dataset_tips = extract_dataset_tip_points(frames, keypoint_info)
+    if args.ckpt_tag:
+        mapped_hand = HandKinematicModel.build_from_config(config, render=False)
+        dataset_tips = map_dataset_tip_points(
+            frames,
+            keypoint_info,
+            retargeting_model=load_model(args.ckpt_tag),
+            hand=mapped_hand,
+            max_frames=args.mapped_max_frames,
+        )
+        workspace_source = {
+            "mode": "checkpoint_mapped_urdf_tips",
+            "checkpoint": args.ckpt_tag,
+            "frames": len(next(iter(dataset_tips.values()))),
+        }
+    else:
+        dataset_tips = extract_dataset_tip_points(frames, keypoint_info)
+        workspace_source = {
+            "mode": "raw_human_tips",
+            "checkpoint": None,
+            "frames": len(frames),
+        }
     urdf_tips = sample_urdf_tip_points(
         config,
         keypoint_info,
@@ -686,12 +763,14 @@ def main() -> None:
     figures = build_layered_tip_workspace_figures(
         dataset_tips,
         urdf_tips,
+        source_label="Mapped" if args.ckpt_tag else "Dataset",
         include_alpha_surface=args.include_alpha_surface,
         alpha=args.alpha,
         surface_max_points=args.surface_max_points,
         surface_seed=args.seed,
     )
     report = summarize_workspace_alignment(dataset_tips, urdf_tips)
+    report["workspace_source"] = workspace_source
     report["overlap"] = build_workspace_overlap_report(
         dataset_tips,
         urdf_tips,
