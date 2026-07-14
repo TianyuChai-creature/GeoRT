@@ -13,8 +13,8 @@
 | --- | --- | --- | --- |
 | H1 | 确认 main 基线 checkpoint 与评测报告已存档 | Step 0 | 10 分钟 |
 | H2 | 目视检查人手/机器人共享全局坐标系可视化方向一致 | Step 4 | 5 分钟 |
-| H3 | D2 锚点采集（50 次记录，按主计划 2.4 手册） | Step 6 | 10–15 分钟 |
-| H4 | D3 接触标签采集（4 指对正负段，按 2.5 手册） | Step 7 | 10–15 分钟 |
+| H3 | 目检 D1 自动挖掘的 D2 锚点报告（不再人工采集） | Step 6 | 5–10 分钟 |
+| H4 | 目检 D1 自动标注的 D3 接触报告（不再人工采集） | Step 7 | 5–10 分钟 |
 | H5 | 端到端遥操作实测主观评估 | Step 8 | 30 分钟 |
 
 ---
@@ -135,18 +135,22 @@ PYTHONPATH=. "$GEORT_PYTHON" -m geort.mocap.visualize_tip_workspace \
 
 **人工验收已通过**：replay 无坍缩/翻转，workspace 映射云分布可接受。P-Chamfer 的结构性弱约束作为后续架构决策依据记录，不在本步骤擅自改动手册要求的 `FK(IK)` 架构。
 
-# Step 6 · 锚点系统（D2）
+# Step 6 · 锚点系统（D2，进行中）
 
 **Codex 做什么**
 
-- [ ]  `geort/anchor/anchor_spec.py`：侧旋/弯曲锚点定义（$K_0=5$，$\lambda=2$，$\beta_1: 0\to\pi/2$ 步长 $\pi/8$），参数可配。
-- [ ]  `geort/anchor/collect_human_anchors.py`：SAPIEN viewer 逐个展示参考构型（含拇指预生成弯曲轨迹的 5 个采样位姿），同时读 HTS 流；按键采集 1–2 秒窗口均值，存人手锚点。
-- [ ]  `geort/anchor/generate_robot_anchors.py`（P3）+ `interpolate.py`（P2，侧旋 K=50 / 弯曲 K=100），输出 `anchors_<hand>.npz` 并写入 manifest。
-- [ ]  trainer 接入 L_align（Step 5 已预留）。
+- [x]  `geort/anchor/human_geometry.py` + `mining.py`：从现有 D1 HTS raw `[T,21,3]` 自动估计逐指侧摆/弯曲；以 2%/98% 鲁棒端点截除外点，再在角度空间按 $[0,25,50,75,100]\%$ 几何等分。每档从邻域真实帧选 medoid，候选不足按可记录的容差回退重筛。
+- [x]  拇指弯曲：对 D1 拇指 TIP 轨迹做 PCA 主流形、分箱近似弧长，并在五个均匀弧长档位选择真实帧 medoid；不再使用固定 $\beta$ 表或人工采集 viewer。
+- [x]  `geort/anchor/mine_human_anchors.py`：输出 `anchors_human_<side>.npz`、JSON 诊断和 HTML 目检报告。人手锚点固定为 5 指 ×（侧摆/弯曲）×5 档 = 50 行，记录来源帧、候选数、支撑数、目标/观测参数与回退历史；输出原子写入且默认拒绝覆盖。右手 D1 已实际生成 50 行与 HTML 报告。
+- [x]  `geort/anchor/anchor_spec.py` + `generate_robot_anchors.py`（P3）：机器人在自身 URDF 可行范围内按相同行程占比取五档，拇指按预生成轨迹弧长取五档；人/机仅按指型与档位序号对应，不传递人手角度数值。纯构型/伪 FK 定向测试已通过，并已对右手真实 URDF 执行。
+- [x]  `interpolate.py`（P2）配对实现：每组五个锚点插值到侧摆 K=50、弯曲 K=100，构造带 finger index 的 250 条侧摆 + 500 条弯曲 = 750 条训练对。生成器将原子写出最终 `anchors_<hand>.npz` 并更新 manifest；右手实际产物为 `anchors_custom_right.npz`，字段为 `[750,3]` 人/机 TIP 点与 `[750,20]` qpos，manifest 已登记。
+- [x]  trainer 实际加载最终锚点并启用 L_align：锚点 batch 使用 `human_tip_contexts [N,5,3]` 经过原 IK/FK 映射，再按 `finger_indices [N]` 选择对应 TIP 与 `robot_points [N,3]` 计算 L_align；旧的未配置 anchors 路径仍跳过。右手 manifest 已实际加载验证，未启动训练。
 
-**人工（H3）**：按主计划 2.4 手册执行 50 次锚点记录（手平放桌面侧旋、五档卷曲、拇指轨迹模仿）。
+**人工（H3）**：运行 D1 自动挖掘后，目检每指每类候选帧数不少于 5、五档跨越实际观测行程且单调、所选 3D 手形为有效真实姿态；不再进行 50 次人工锚点记录。
 
-**验收**：`anchors_custom_right.npz` 含 5 指×两类、插值后数量正确；可视化人手锚点序列与机器人锚点序列形状趋势一致；重新训练后 L_align 明显下降且其余三项损失不变差；回放对比 Step 5 版：握拳/张手等歧义易发姿态的映射更稳定可预测。
+**自动验收结果（右手）**：使用 `main` 的 `.venv` 完成 20 epoch Step 6 训练，checkpoint 为 `checkpoint/custom_right_2026-07-14_10-50-22_custom_right_2026-07-14_anydexrt_step6`。P-Chamfer 从 0.1316 降至 0.0658，L_dist 从 0.1489 降至 0.0573，L_motion 从 -0.4265 降至 -0.9032，L_align 从 0.5513 降至 0.2097；四项自动损失验收通过。H3 目检与回放稳定性验收尚待执行。
+
+**验收**：人手 `anchors_human_<side>.npz` 含 50 行且报告目检通过；最终 `anchors_<hand>.npz` 含 5 指×两类、插值后 750 条同档位人机配对；重新训练后 L_align 下降且其余三项损失不变差；回放对比 Step 5 版中握拳/张手等歧义姿态更稳定可预测。
 
 # Step 7 · 接触分类器 + 捏合推理（D3）
 

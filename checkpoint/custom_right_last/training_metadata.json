@@ -1,34 +1,15 @@
 {
-  "chamfer_target": "human",
-  "cli_args": {
-    "chamfer_target": "human",
-    "chamfer_target_path": "data/custom_right.npz",
-    "mcp1_fist_prior_dip_weight": 0.7,
-    "mcp1_fist_prior_mcp_weight": 2.0,
-    "mcp1_fist_prior_pip_weight": 1.0,
-    "mcp1_fist_prior_target_alpha": 0.5,
-    "mcp1_fist_prior_top_fraction": 0.08,
-    "mold_path": "data/custom_right_humanshaped_manual_prior_mcp1boost_a06_debug/mold.json",
-    "save_every": 0,
-    "tag": "aa_limit_manual_prior_mcp1prior_w1_a05_full",
-    "update_latest": true
-  },
-  "human_data_path": "/home/creature/Desktop/GeoRT/data/hts_right_20260703_quest3_v3.npy",
-  "loss_weights": {
-    "w_chamfer": 80.0,
-    "w_collision": 0.0,
-    "w_curvature": 0.1,
-    "w_mcp1_fist_prior": 1.0,
-    "w_pinch": 5.0,
-    "w_segment_direction": 0.5
-  },
-  "mold": {
-    "path": "data/custom_right_humanshaped_manual_prior_mcp1boost_a06_debug/mold.json",
-    "sha256": "b2deda55cc7454671b496f1b9a2984d0407b250668dd07d542d9d6179694ce99"
-  },
-  "n_epoch": 200,
-  "target_cloud": {
-    "path": "data/custom_right.npz",
-    "sha256": "a86f347d14aba1748d78560f896eee2cbab1d76217dea722574afab1c9359658"
-  }
+    "human_data_manifest": "/tmp/GeoRT-anydexrt/data/hts_right_prepared.json",
+    "prepared_data": "hts_right_prepared.npz",
+    "epoch": 20,
+    "batch_size": 2048,
+    "learning_rate": 0.0001,
+    "objectives": [
+        "partial_chamfer",
+        "distance_preservation",
+        "motion_direction"
+    ],
+    "equal_objective_weights": true,
+    "anchors_enabled": true,
+    "timestamp": "2026-07-14T10:50:22.948469"
 }

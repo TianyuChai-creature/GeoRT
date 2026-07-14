@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 
 import numpy as np
@@ -10,7 +11,9 @@ import geort.anchor.mining as mining
 from geort.anchor.mining import (
     CandidateFilterError,
     filter_motion_candidates,
+    mine_human_anchor_records,
     robust_angle_targets,
+    select_thumb_arc_medoids,
     select_level_medoids,
 )
 
@@ -35,17 +38,17 @@ def test_robust_targets_are_geometric_not_empirical_cdf_levels() -> None:
     assert np.max(np.abs(result.targets - empirical_levels)) > 0.5
 
 
-def test_robust_targets_support_custom_strictly_increasing_fractions() -> None:
+def test_robust_targets_use_only_the_approved_five_level_fractions() -> None:
     result = robust_angle_targets(
         np.linspace(-0.4, 1.1, 101),
         endpoint_quantiles=(0.1, 0.9),
-        level_fractions=(0.0, 0.1, 0.4, 0.8, 1.0),
     )
 
+    assert mining.LEVEL_FRACTIONS.tolist() == [0.0, 0.25, 0.5, 0.75, 1.0]
     assert np.allclose(
         result.targets,
         result.endpoints[0]
-        + np.array([0.0, 0.1, 0.4, 0.8, 1.0]) * np.ptp(result.endpoints),
+        + mining.LEVEL_FRACTIONS * np.ptp(result.endpoints),
     )
     metadata = result.endpoint_support
     assert metadata == {
@@ -57,6 +60,19 @@ def test_robust_targets_support_custom_strictly_increasing_fractions() -> None:
         "retained_count": 81,
     }
     assert json.loads(json.dumps(metadata)) == metadata
+
+
+def test_approved_level_fractions_are_not_publicly_customizable() -> None:
+    with pytest.raises(ValueError, match="read-only"):
+        mining.LEVEL_FRACTIONS[1] = 0.1
+    assert "level_fractions" not in inspect.signature(robust_angle_targets).parameters
+    with pytest.raises(TypeError, match="level_fractions"):
+        robust_angle_targets(
+            np.linspace(-1.0, 1.0, 21),
+            level_fractions=(0.0, 0.1, 0.4, 0.8, 1.0),
+        )
+
+
 def test_robust_target_result_arrays_are_defensively_read_only() -> None:
     result = robust_angle_targets(np.linspace(-1.0, 1.0, 21))
 
@@ -116,6 +132,136 @@ def test_level_selection_uses_exact_descriptor_medoids() -> None:
     assert result.support_counts.tolist() == [5, 5, 5, 5, 5]
     assert all(len(history) == 1 for history in result.expansion_history)
     assert all(history[0].factor == 1.0 for history in result.expansion_history)
+
+
+def test_level_selection_scales_extreme_finite_descriptors_before_distances() -> None:
+    targets = np.linspace(0.0, 4.0, 5)
+    offsets = np.array([-0.08, -0.04, 0.0, 0.04, 0.08])
+    parameters = (targets[:, None] + offsets).reshape(-1)
+    descriptors = np.tile(
+        np.array([[0.0], [10.0], [9.0], [8.0], [7.0]]) * 1e200,
+        (5, 1),
+    )
+
+    result = select_level_medoids(
+        parameters,
+        descriptors,
+        np.arange(25, dtype=np.int64),
+        targets,
+    )
+
+    assert result.selected_row_indices.tolist() == [3, 8, 13, 18, 23]
+
+
+def test_thumb_main_trajectory_selects_real_monotonic_arc_medoids() -> None:
+    parameter = np.linspace(0.0, np.pi / 2.0, 129)
+    tip_points = np.column_stack(
+        (np.cos(parameter), np.sin(parameter), 0.1 * parameter)
+    )
+    result = select_thumb_arc_medoids(
+        tip_points,
+        tip_points,
+        np.arange(tip_points.shape[0], dtype=np.int64),
+        manifold_bins=32,
+        min_support=1,
+    )
+
+    assert result.selected_row_indices.shape == (5,)
+    assert len(set(result.source_indices.tolist())) == 5
+    assert np.all(np.diff(result.observed_arc_fractions) > 0.0)
+    assert result.populated_bin_count >= 5
+    assert result.explained_variance > 0.9
+
+
+def _rotate_in_palm(vector: np.ndarray, angle: float) -> np.ndarray:
+    cosine = np.cos(angle)
+    sine = np.sin(angle)
+    return np.array(
+        [
+            cosine * vector[0] - sine * vector[1],
+            sine * vector[0] + cosine * vector[1],
+            0.0,
+        ]
+    )
+
+
+def _direction(azimuth: np.ndarray, elevation: float) -> np.ndarray:
+    return np.cos(elevation) * azimuth + np.array([0.0, 0.0, np.sin(elevation)])
+
+
+def _synthetic_anchor_frame(
+    *,
+    lateral: float = 0.0,
+    bending: float = 0.0,
+    thumb_bending: float = 0.0,
+) -> np.ndarray:
+    frame = np.zeros((21, 3), dtype=np.float64)
+    mcp_positions = {
+        5: np.array([0.5, 0.8, 0.0]),
+        9: np.array([0.0, 1.0, 0.0]),
+        13: np.array([-0.25, 0.9, 0.0]),
+        17: np.array([-0.5, 0.8, 0.0]),
+    }
+    for mcp_index, mcp in mcp_positions.items():
+        direction = _rotate_in_palm(mcp / np.linalg.norm(mcp), lateral)
+        elevations = (bending, 2.0 * bending, 2.5 * bending)
+        frame[mcp_index] = mcp
+        frame[mcp_index + 1] = mcp + _direction(direction, elevations[0])
+        frame[mcp_index + 2] = frame[mcp_index + 1] + _direction(
+            direction, elevations[1]
+        )
+        frame[mcp_index + 3] = frame[mcp_index + 2] + _direction(
+            direction, elevations[2]
+        )
+
+    thumb_cmc = np.array([0.2, 0.25, 0.0])
+    thumb_base = np.array([0.8, 0.6, 0.0])
+    thumb_base /= np.linalg.norm(thumb_base)
+    frame[1] = thumb_cmc
+    frame[2] = thumb_cmc + thumb_base
+    thumb_direction = _rotate_in_palm(thumb_base, lateral)
+    frame[3] = frame[2] + _direction(thumb_direction, thumb_bending)
+    frame[4] = frame[3] + _direction(thumb_direction, 2.0 * thumb_bending)
+    return frame
+
+
+def test_mine_human_anchor_records_returns_ordered_fifty_row_contract() -> None:
+    levels = np.linspace(-0.2, 0.2, 5)
+    lateral_frames = [_synthetic_anchor_frame(lateral=value) for value in levels]
+    bending_frames = [
+        _synthetic_anchor_frame(bending=value)
+        for value in np.linspace(0.0, 0.4, 5)
+    ]
+    thumb_frames = [
+        _synthetic_anchor_frame(thumb_bending=value)
+        for value in np.linspace(0.0, 0.8, 5)
+    ]
+    anchors = mine_human_anchor_records(
+        np.stack([*lateral_frames, *bending_frames, *thumb_frames]),
+        endpoint_quantiles=(0.0, 1.0),
+        min_candidates=1,
+        min_level_support=1,
+        thumb_manifold_bins=5,
+    )
+
+    assert anchors.human_frames.shape == (50, 21, 3)
+    assert anchors.human_points.shape == (50, 3)
+    assert anchors.source_indices.shape == (50,)
+    assert anchors.finger_indices.tolist() == [
+        finger_index
+        for finger_index in range(5)
+        for _anchor_type in range(2)
+        for _level in range(5)
+    ]
+    assert anchors.anchor_types.tolist() == [
+        anchor_type
+        for _finger in range(5)
+        for anchor_type in ("lateral", "bending")
+        for _level in range(5)
+    ]
+    assert anchors.levels.tolist() == list(range(5)) * 10
+    assert np.allclose(anchors.trajectory_t.reshape(10, 5), mining.LEVEL_FRACTIONS)
+    assert len(anchors.group_metadata) == 10
 
 
 def test_level_selection_breaks_medoid_ties_by_target_distance_then_source() -> None:

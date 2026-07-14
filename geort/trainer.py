@@ -57,7 +57,16 @@ class PreparedTrainingData:
     keypoint_names: list[str]
     finger_names: list[str]
     human_ids: list[int]
-    anchor_points: tuple[np.ndarray, np.ndarray] | None
+    anchor_points: "AnchorTrainingPoints | None"
+
+
+@dataclass(frozen=True)
+class AnchorTrainingPoints:
+    """Normalized alignment samples, optionally indexed to one target finger."""
+
+    human_tip_contexts: np.ndarray
+    robot_points: np.ndarray
+    finger_indices: np.ndarray | None
 
 
 def merge_dict_list(dicts):
@@ -108,7 +117,7 @@ def _load_anchor_points(
     manifest: dict,
     manifest_path: Path,
     finger_names: list[str],
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> AnchorTrainingPoints | None:
     anchor_spec = manifest.get("anchors")
     if anchor_spec is None:
         warnings.warn(
@@ -120,25 +129,97 @@ def _load_anchor_points(
     if isinstance(anchor_spec, str):
         anchor_path = manifest_path.parent / anchor_spec
         normalized = False
+        finger_indexed = False
     else:
         anchor_path = manifest_path.parent / anchor_spec["path"]
         normalized = bool(anchor_spec.get("normalized", False))
+        finger_indexed = bool(anchor_spec.get("finger_indexed", False))
     with np.load(anchor_path) as anchors:
         human = np.asarray(anchors["human_points"], dtype=np.float32)
         robot = np.asarray(anchors["robot_points"], dtype=np.float32)
+        if finger_indexed:
+            if "human_tip_contexts" not in anchors or "finger_indices" not in anchors:
+                raise ValueError(
+                    "Finger-indexed anchors require human_tip_contexts and finger_indices"
+                )
+            human_contexts = np.asarray(
+                anchors["human_tip_contexts"], dtype=np.float32
+            )
+            finger_indices = np.asarray(anchors["finger_indices"])
+        else:
+            human_contexts = human
+            finger_indices = None
+    if finger_indexed:
+        expected_context_tail = (len(finger_names), 3)
+        if (
+            human_contexts.ndim != 3
+            or human_contexts.shape[1:] != expected_context_tail
+            or robot.shape != (human_contexts.shape[0], 3)
+            or finger_indices.ndim != 1
+            or finger_indices.shape != (human_contexts.shape[0],)
+            or finger_indices.dtype.kind not in "iu"
+            or finger_indices.dtype.kind == "b"
+            or np.any(finger_indices < 0)
+            or np.any(finger_indices >= len(finger_names))
+        ):
+            raise ValueError(
+                "Finger-indexed anchors require [N, K, 3] contexts, [N, 3] "
+                "robot points, and valid [N] finger indices"
+            )
+        finger_indices = finger_indices.astype(np.int64, copy=False)
+        if not normalized:
+            human_contexts = normalize_finger_points(
+                human_contexts, finger_names, manifest["human"]["normalization"]
+            )
+            robot_centers, robot_scales = _normalization_arrays(
+                finger_names, manifest["robot"]["normalization"]
+            )
+            robot = (
+                robot - robot_centers[0, finger_indices]
+            ) / robot_scales[0, finger_indices]
+        return AnchorTrainingPoints(
+            human_tip_contexts=human_contexts.astype(np.float32, copy=False),
+            robot_points=robot.astype(np.float32, copy=False),
+            finger_indices=finger_indices,
+        )
     expected_tail = (len(finger_names), 3)
-    if human.shape[1:] != expected_tail or robot.shape[1:] != expected_tail:
+    if human_contexts.shape[1:] != expected_tail or robot.shape[1:] != expected_tail:
         raise ValueError(
             f"Anchor points must have shape [N, {len(finger_names)}, 3]"
         )
     if not normalized:
-        human = normalize_finger_points(
-            human, finger_names, manifest["human"]["normalization"]
+        human_contexts = normalize_finger_points(
+            human_contexts, finger_names, manifest["human"]["normalization"]
         )
         robot = normalize_finger_points(
             robot, finger_names, manifest["robot"]["normalization"]
         )
-    return human, robot
+    return AnchorTrainingPoints(
+        human_tip_contexts=human_contexts.astype(np.float32, copy=False),
+        robot_points=robot.astype(np.float32, copy=False),
+        finger_indices=None,
+    )
+
+
+def select_finger_tips(
+    mapped_tips: torch.Tensor,
+    finger_indices: torch.Tensor,
+) -> torch.Tensor:
+    """Select one mapped TIP per row using the paired anchor's finger index."""
+    if mapped_tips.ndim != 3 or mapped_tips.shape[-1] != 3:
+        raise ValueError("mapped_tips must have shape [N, K, 3]")
+    if (
+        finger_indices.ndim != 1
+        or finger_indices.shape[0] != mapped_tips.shape[0]
+        or finger_indices.dtype not in (torch.int32, torch.int64)
+        or torch.any(finger_indices < 0)
+        or torch.any(finger_indices >= mapped_tips.shape[1])
+    ):
+        raise ValueError("finger_indices must be valid integer indices with shape [N]")
+    return mapped_tips[
+        torch.arange(mapped_tips.shape[0], device=mapped_tips.device),
+        finger_indices,
+    ]
 
 
 def load_prepared_training_data(
@@ -419,14 +500,15 @@ class GeoRTTrainer:
         anchor_loader = None
         anchor_iterator = None
         if data.anchor_points is not None:
-            anchor_loader = DataLoader(
-                TensorDataset(
-                    torch.from_numpy(data.anchor_points[0]),
-                    torch.from_numpy(data.anchor_points[1]),
-                ),
-                batch_size=32,
-                shuffle=True,
-            )
+            anchor_tensors = [
+                torch.from_numpy(data.anchor_points.human_tip_contexts),
+                torch.from_numpy(data.anchor_points.robot_points),
+            ]
+            if data.anchor_points.finger_indices is not None:
+                anchor_tensors.append(
+                    torch.from_numpy(data.anchor_points.finger_indices)
+                )
+            anchor_loader = DataLoader(TensorDataset(*anchor_tensors), batch_size=32, shuffle=True)
             anchor_iterator = iter(anchor_loader)
 
         def map_tips(points):
@@ -476,15 +558,20 @@ class GeoRTTrainer:
 
                 if anchor_iterator is not None:
                     try:
-                        human_anchor, robot_anchor = next(anchor_iterator)
+                        anchor_batch = next(anchor_iterator)
                     except StopIteration:
                         anchor_iterator = iter(anchor_loader)
-                        human_anchor, robot_anchor = next(anchor_iterator)
+                        anchor_batch = next(anchor_iterator)
+                    human_anchor, robot_anchor = anchor_batch[:2]
                     human_anchor = human_anchor.to(self.device).float()
                     robot_anchor = robot_anchor.to(self.device).float()
-                    anchor_loss = anchor_align_loss(
-                        map_tips(human_anchor), robot_anchor
-                    )
+                    mapped_anchor = map_tips(human_anchor)
+                    if len(anchor_batch) == 3:
+                        finger_anchor = anchor_batch[2].to(self.device).long()
+                        mapped_anchor = select_finger_tips(
+                            mapped_anchor, finger_anchor
+                        )
+                    anchor_loss = anchor_align_loss(mapped_anchor, robot_anchor)
                     total_loss = total_loss + anchor_loss
 
                 optimizer.zero_grad()

@@ -30,18 +30,23 @@ Recorded on 2026-07-13 after the user requested an early checkpoint:
   Palm alignment and angle extraction process all 234,114 right-hand D1
   frames in about 1.83 seconds; 37 focused tests pass.
 - Task 3 has an implemented, tested core for robust endpoints, bounded local
-  medoids, monotonic distinct selection, and candidate fallback. Its original
-  focused suite reached 54 passing tests, but specification review found two
-  unresolved blockers:
-  1. `robust_angle_targets` still permits caller-defined level fractions;
-     it must expose only fixed `[0, 0.25, 0.5, 0.75, 1]` levels.
-  2. Exact-medoid distance squaring can overflow for finite descriptors near
-     `1e200`; uniformly scale descriptors before pairwise subtraction.
-- Task 3 must add RED tests for those two blockers, implement the fixes, and
-  repeat specification and quality review before it is accepted.
-- Tasks 4 through 8 have not started. No human-anchor NPZ, HTML report,
-  robot-paired anchors, manifest update, trainer integration, or new training
-  artifact has been produced.
+  medoids, monotonic distinct selection, and candidate fallback. The two
+  earlier specification blockers have been fixed locally:
+  1. `robust_angle_targets` now exposes only fixed
+     `[0, 0.25, 0.5, 0.75, 1]` levels.
+  2. Local medoid descriptors are uniformly scaled before pairwise distance
+     calculation, preserving the selected medoid while avoiding finite-value
+     overflow.
+- The two fixes each had a failing regression test first. Post-fix results:
+  53 mining tests, 104 anchor-related tests, and 141 full-suite tests pass;
+  compilation and whitespace checks pass. Independent specification and
+  code-quality re-review remains pending before Task 3 is accepted.
+- Tasks 4 and 5 are implemented and locally verified with focused tests. The
+  mining core now yields the ordered 50-row human contract, including thumb
+  PCA/arc-length medoids. The new CLI atomically emits ignored D2 NPZ, JSON,
+  and HTML inspection artifacts; it has not run on production D1 data yet.
+- Tasks 6 through 8 have not started. No robot-paired anchors, manifest
+  update, trainer integration, or new training artifact has been produced.
 
 ### Task 1: Remove Superseded Collection and Preserve Generic Interpolation
 
@@ -189,11 +194,11 @@ history.
 
 Run `tests/test_anchor_mining.py` plus the geometry tests.
 
-- [ ] **Step 8: Resolve Task 3 review blockers**
+- [ ] **Step 8: Complete post-fix Task 3 reviews**
 
-Lock `robust_angle_targets` to the approved five fractions and stabilize
-Euclidean medoid distances for extreme finite descriptors. Re-run the focused
-suite and both review gates.
+The fixed five-level API and stable distance calculation have regression
+coverage and passing local verification. Run specification and code-quality
+review again before accepting Task 3.
 
 ### Task 4: Thumb Main-Trajectory Mining and 50-Row Human Contract
 
@@ -201,20 +206,20 @@ suite and both review gates.
 - Modify: `geort/anchor/mining.py`
 - Modify: `tests/test_anchor_mining.py`
 
-- [ ] **Step 1: Write failing thumb trajectory tests**
+- [x] **Step 1: Write failing thumb trajectory tests**
 
 Create a curved synthetic thumb TIP path with dense neutral dwell and
 outliers. Require five distinct real source indices at uniformly spaced arc
 fractions, deterministic output, at least five populated bins, and report
 metadata including PCA explained variance.
 
-- [ ] **Step 2: Implement thumb trajectory**
+- [x] **Step 2: Implement thumb trajectory**
 
 PCA-order the robust thumb cloud, compute deterministic medoids in 64 ordered
 bins, construct the medoid polyline, and choose real frames around five
 uniform cumulative-arc targets.
 
-- [ ] **Step 3: Write failing full mining-contract test**
+- [x] **Step 3: Write failing full mining-contract test**
 
 Use synthetic 21-point frames containing all ten motions. Require exactly 50
 rows ordered by finger, type, and level with fields:
@@ -225,13 +230,13 @@ anchor_types, levels, trajectory_t, target_parameters, observed_parameters,
 candidate_counts, support_counts
 ```
 
-- [ ] **Step 4: Implement `mine_human_anchor_records`**
+- [x] **Step 4: Implement `mine_human_anchor_records`**
 
 Compose geometry, candidate filters, geometric targets, medoids, and thumb
 arc mining. Validate monotonicity and distinct frames per group before
 returning arrays plus JSON-serializable diagnostics.
 
-- [ ] **Step 5: Verify Tasks 2-4**
+- [x] **Step 5: Verify Tasks 2-4**
 
 Run all anchor geometry/mining/interpolation tests together.
 
@@ -241,13 +246,13 @@ Run all anchor geometry/mining/interpolation tests together.
 - Create: `geort/anchor/mine_human_anchors.py`
 - Create: `tests/test_mine_human_anchors.py`
 
-- [ ] **Step 1: Write failing CLI-core tests**
+- [x] **Step 1: Write failing CLI-core tests**
 
 Test NPY shape validation, SHA-256 metadata, default paths
 `data/anchors_human_<side>.npz`, explicit overwrite protection, atomic NPZ
 and JSON replacement, and report payload counts.
 
-- [ ] **Step 2: Implement output core and CLI**
+- [x] **Step 2: Implement output core and CLI**
 
 CLI arguments include:
 
@@ -266,18 +271,18 @@ CLI arguments include:
 
 Runtime files are ignored by Git. Do not update the prepared manifest yet.
 
-- [ ] **Step 3: Write failing report tests**
+- [x] **Step 3: Write failing report tests**
 
 Require one histogram and five-pose 3D view per finger/type, target/observed
 markers, counts, endpoints, fallback history, source indices, and one embedded
 Plotly bundle.
 
-- [ ] **Step 4: Implement JSON and HTML reports**
+- [x] **Step 4: Implement JSON and HTML reports**
 
 Keep human pose views inspectable and report file size bounded. The CLI exits
 nonzero without writing final outputs if any acceptance check fails.
 
-- [ ] **Step 5: Verify CLI without mining production D1**
+- [x] **Step 5: Verify CLI without mining production D1**
 
 Run CLI `--help` and a synthetic end-to-end fixture.
 
@@ -290,23 +295,23 @@ Run CLI `--help` and a synthetic end-to-end fixture.
 - Create: `tests/test_generate_robot_anchors.py`
 - Modify: `geort/anchor/__init__.py`
 
-- [ ] **Step 1: Write failing robot trajectory tests**
+- [x] **Step 1: Write failing robot trajectory tests**
 
 Require five lateral qpos values across MCP2 limits, five non-thumb bending
 values across the feasible intersection for `[0,b,b,b/2]`, neutral
 non-target joints, material limit validation, and no fixed human-angle table.
 
-- [ ] **Step 2: Implement robot trajectory specification**
+- [x] **Step 2: Implement robot trajectory specification**
 
 Expose level fractions and pure lateral/non-thumb qpos constructors. Keep
 robot values independent from mined human angle values.
 
-- [ ] **Step 3: Write failing thumb FK arc tests**
+- [x] **Step 3: Write failing thumb FK arc tests**
 
 With a fake FK callback, require dense feasible thumb qpos sampling followed
 by five uniform TIP-arc selections with exact endpoints.
 
-- [ ] **Step 4: Implement thumb trajectory and paired builder**
+- [x] **Step 4: Implement thumb trajectory and paired builder**
 
 `build_paired_anchors` validates 50 mined rows, interpolates human XYZ and
 robot qpos by group, calls target-finger FK, and produces exactly 750 rows.

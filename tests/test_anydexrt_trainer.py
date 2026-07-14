@@ -152,9 +152,80 @@ def test_manifest_anchor_points_are_normalized_when_enabled(tmp_path: Path) -> N
     )
 
     assert data.anchor_points is not None
-    human, robot = data.anchor_points
-    assert np.allclose(human, 1.0)
-    assert np.allclose(robot, 1.0)
+    assert np.allclose(data.anchor_points.human_tip_contexts, 1.0)
+    assert np.allclose(data.anchor_points.robot_points, 1.0)
+
+
+def test_finger_indexed_anchor_bundle_keeps_context_and_normalizes_target(
+    tmp_path: Path,
+) -> None:
+    np.savez(
+        tmp_path / "prepared.npz",
+        human_points=np.zeros((2, 2, 3), dtype=np.float32),
+        robot_points=np.zeros((2, 2, 3), dtype=np.float32),
+        keypoint_names=np.array(["thumb_tip", "index_tip"]),
+        finger_names=np.array(["thumb", "index"]),
+        human_ids=np.array([4, 8]),
+    )
+    np.savez(
+        tmp_path / "anchors.npz",
+        human_tip_contexts=np.array(
+            [
+                [[3.0, 3.0, 3.0], [9.0, 9.0, 9.0]],
+                [[5.0, 5.0, 5.0], [13.0, 13.0, 13.0]],
+            ],
+            dtype=np.float32,
+        ),
+        human_points=np.zeros((2, 3), dtype=np.float32),
+        robot_points=np.array([[5.0, 5.0, 5.0], [13.0, 13.0, 13.0]], dtype=np.float32),
+        finger_indices=np.array([0, 1], dtype=np.int64),
+    )
+    manifest = {
+        "schema_version": 1,
+        "prepared_data": "prepared.npz",
+        "config": "custom_right",
+        "keypoint_names": ["thumb_tip", "index_tip"],
+        "finger_names": ["thumb", "index"],
+        "human": {"normalization": {
+            "thumb": {"center": [1, 1, 1], "scale": 2.0},
+            "index": {"center": [1, 1, 1], "scale": 4.0},
+        }},
+        "robot": {"normalization": {
+            "thumb": {"center": [1, 1, 1], "scale": 4.0},
+            "index": {"center": [1, 1, 1], "scale": 6.0},
+        }},
+        "anchors": {
+            "path": "anchors.npz",
+            "normalized": False,
+            "finger_indexed": True,
+        },
+        "contact": None,
+    }
+    manifest_path = tmp_path / "prepared.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    data = trainer.load_prepared_training_data(
+        manifest_path, expected_config="custom_right"
+    )
+
+    assert data.anchor_points is not None
+    anchors = data.anchor_points
+    assert anchors.finger_indices.tolist() == [0, 1]
+    assert np.allclose(anchors.human_tip_contexts[0], [[1.0] * 3, [2.0] * 3])
+    assert np.allclose(anchors.robot_points, [[1.0] * 3, [2.0] * 3])
+
+
+def test_select_finger_tips_uses_each_anchor_finger_index() -> None:
+    mapped = torch.tensor(
+        [
+            [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            [[3.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
+        ]
+    )
+
+    selected = trainer.select_finger_tips(mapped, torch.tensor([1, 0]))
+
+    assert torch.equal(selected, torch.tensor([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0]]))
 
 
 def test_trainer_source_does_not_retain_old_objectives() -> None:
