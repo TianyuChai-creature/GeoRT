@@ -663,6 +663,16 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # Guard: motion_delta below ~0.002 (0.1 mm in metric space) enters the
+    # float32 normalisation round-trip noise floor and corrupts the direction
+    # signal (see test_analytic_fk.py noise-floor calibration).
+    if args.motion_delta < 0.002:
+        print(
+            f"WARNING: --motion_delta={args.motion_delta} is below the 0.002 "
+            f"noise-floor lower bound.  Direction signal may be dominated by "
+            f"float32 round-trip noise.  Consider --motion_delta >= 0.005."
+        )
+
     config = get_config(args.hand)
     trainer = GeoRTTrainer(config)
 
