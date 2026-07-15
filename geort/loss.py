@@ -189,3 +189,53 @@ def synergy_loss(
 
     loss = torch.stack(losses, dim=1).mean()
     return loss, residuals
+
+
+def null_space_loss(
+    joint_norm: torch.Tensor,
+    fk_model,
+    finger_joint_indices: list[list[int]],
+) -> torch.Tensor:
+    """Per-finger kinematic null-space regularisation (normalised joint space).
+
+    Computes the 3×4 Jacobian J of fingertip position w.r.t. each finger's
+    4 normalised joint angles.  SVD gives the null-space direction n.
+    Penalises  (n · q_norm)²  — deviation from q_norm=0 (mid-range) along n.
+
+    n is detached (treated as a per-sample constant) to avoid back-prop
+    through SVD.
+
+    Args:
+        joint_norm: Normalised joint angles [B, 20] in [-1, 1].
+        fk_model: Callable mapping [B, 20] → [B, 5, 3] (expects normalised input).
+        finger_joint_indices: List of 5 lists, each with 4 joint indices.
+
+    Returns:
+        Scalar null-space loss averaged over samples and fingers.
+    """
+    B = joint_norm.shape[0]
+    losses = []
+
+    for fi, joint_idx in enumerate(finger_joint_indices):
+        # Jacobian J: [B, 3, 4] in normalised joint space.
+        J_blocks = []
+        for dim in range(3):
+            (grad,) = torch.autograd.grad(
+                fk_model(joint_norm)[:, fi, dim].sum(),
+                joint_norm,
+                retain_graph=True,
+                create_graph=False,
+            )
+            J_blocks.append(grad[:, joint_idx])  # [B, 4]
+        J = torch.stack(J_blocks, dim=1)  # [B, 3, 4]
+
+        # SVD per sample → null-space direction n (detached, batched).
+        _U, _S, Vh = torch.linalg.svd(J.detach(), full_matrices=False)  # Vh: [B, 3, 4]
+        n = Vh[:, -1, :]  # [B, 4] — last right singular vector
+
+        # Deviation from mid-range (q_norm=0) along null-space direction.
+        q_finger = joint_norm[:, joint_idx]  # [B, 4]
+        dev = (q_finger * n).sum(dim=1)  # [B]
+        losses.append(dev.square())
+
+    return torch.stack(losses, dim=1).mean()

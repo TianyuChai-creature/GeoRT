@@ -19,7 +19,7 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss
+from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss, null_space_loss
 from geort.keypoint_normalization import (
     fit_finger_normalization,
     normalize_finger_points,
@@ -374,6 +374,13 @@ class GeoRTTrainer:
         ).cuda()
         os.makedirs("./checkpoint", exist_ok=True)
 
+        # Build per-finger joint index blocks for nullspace regularisation.
+        finger_joint_indices = [
+            [joint_order.index(f"F{fi+1}-R-{s}") for s in ("MCP2", "MCP1", "PIP", "DIP")]
+            for fi in range(5)
+        ]
+        q_mid_t = (joint_lower_limit_t + joint_upper_limit_t) / 2.0
+
         ik_optim = optim.AdamW(ik_model.parameters(), lr=1e-4)
 
         # Workspace.
@@ -390,7 +397,8 @@ class GeoRTTrainer:
         w_pinch = kwargs.get("w_pinch", 1.0)
         pinch_threshold = kwargs.get("pinch_threshold", 0.015)
         w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
-        synergy_weight = float(kwargs.get("synergy_weight", 0.01))
+        synergy_weight = float(kwargs.get("synergy_weight", 0.0))
+        nullspace_weight = float(kwargs.get("nullspace_weight", 0.01))
         synergy_lambda = float(kwargs.get("synergy_lambda", 2.0))
         # Load PCA synergy reference if available (data-driven mode).
         pca_synergy_path = kwargs.get("pca_synergy_path", None)
@@ -631,6 +639,14 @@ class GeoRTTrainer:
                     synergy_loss_val = torch.zeros((), device=joint.device)
                     synergy_residuals = {"beta1_beta2_mean_abs": 0.0, "beta1_lambda_beta3_mean_abs": 0.0}
 
+                # [Null-space regularisation] — per-finger kinematic nullspace.
+                if nullspace_weight > 0.0:
+                    null_loss = null_space_loss(
+                        joint, fk_model, finger_joint_indices
+                    )
+                else:
+                    null_loss = torch.zeros((), device=joint.device)
+
                 # [MCP1 fist prior]
                 if mcp1_fist_prior_mask is not None:
                     mcp1_fist_prior_loss = compute_mcp1_fist_prior_loss(
@@ -659,6 +675,7 @@ class GeoRTTrainer:
                        distance_loss * w_distance + \
                        curvature_loss * w_curvature + \
                        synergy_loss_val * synergy_weight + \
+                       null_loss * nullspace_weight + \
                        collision_loss * w_collision + \
                        pinch_loss * w_pinch + \
                        mcp1_fist_prior_loss * w_mcp1_fist_prior
@@ -680,6 +697,8 @@ class GeoRTTrainer:
                         f" - MCP1FistPrior: {format_loss(mcp1_fist_prior_loss.item())}"
                         f" - Synergy: {format_loss(synergy_loss_val.item())}"
                     )
+                    if nullspace_weight > 0.0:
+                        print(f"        Nullspace: {format_loss(null_loss.item())}")
                     if synergy_pca_params is not None:
                         dev_str = " ".join(
                             f"{k.split('_')[0]}={v:.3f}"
@@ -728,8 +747,10 @@ if __name__ == '__main__':
     parser.add_argument('--mcp1_fist_prior_mcp_weight', type=float, default=2.0)
     parser.add_argument('--mcp1_fist_prior_pip_weight', type=float, default=1.0)
     parser.add_argument('--mcp1_fist_prior_dip_weight', type=float, default=0.7)
-    parser.add_argument('--synergy_weight', type=float, default=0.01,
-                        help='Weight for F2-F5 bending synergy regularisation; 0 disables.')
+    parser.add_argument('--nullspace_weight', type=float, default=0.01,
+                        help='Weight for per-finger kinematic nullspace regularisation; 0 disables.')
+    parser.add_argument('--synergy_weight', type=float, default=0.0,
+                        help='Weight for F2-F5 synergy regularisation; 0 disables.')
     parser.add_argument('--synergy_lambda', type=float, default=2.0,
                         help='Synergy ratio λ for β1=λ·β3 constraint (hand-crafted mode only).')
     parser.add_argument('--pca_synergy_path', type=str, default=None,
@@ -781,6 +802,7 @@ if __name__ == '__main__':
         mcp1_fist_prior_pip_weight=args.mcp1_fist_prior_pip_weight,
         mcp1_fist_prior_dip_weight=args.mcp1_fist_prior_dip_weight,
         synergy_weight=args.synergy_weight,
+        nullspace_weight=args.nullspace_weight,
         synergy_lambda=args.synergy_lambda,
         pca_synergy_path=args.pca_synergy_path,
         save_every=args.save_every,
