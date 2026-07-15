@@ -55,3 +55,32 @@ def partial_chamfer_distance(input_points, target_points):
     pairwise_distance = torch.cdist(input_points, target_points, p=2.0)  # [B, N, M]
     min_distance, _ = pairwise_distance.min(dim=2)  # [B, N]
     return min_distance.mean()
+
+
+def distance_preservation(points, mapped_points):
+    """Per-finger intra-workspace isometry constraint.
+
+    For each finger i, compare pairwise distances among B sampled positions
+    before and after mapping.  Prevents collapse, stretch, or local distortion
+    of the fingertip workspace.
+
+    L_dist^i = 1/(B*(B-1)) * sum_{j1!=j2} (||f_m(x_j1)-f_m(x_j2)|| - ||x_j1-x_j2||)^2
+
+    Args:
+        points: Original human tip positions [B, K, 3].
+        mapped_points: Mapped robot tip positions [B, K, 3].
+
+    Returns:
+        Scalar loss averaged over fingers.
+    """
+    B, K, _ = points.shape
+    if B < 2:
+        return torch.zeros((), device=points.device, dtype=points.dtype)
+    mask = ~torch.eye(B, dtype=torch.bool, device=points.device)
+    losses = []
+    for i in range(K):
+        orig_dists = torch.cdist(points[:, i, :], points[:, i, :])       # [B, B]
+        mapped_dists = torch.cdist(mapped_points[:, i, :], mapped_points[:, i, :])  # [B, B]
+        squared_diff = (mapped_dists - orig_dists).square()
+        losses.append(squared_diff[:, mask].mean())
+    return torch.stack(losses).mean()

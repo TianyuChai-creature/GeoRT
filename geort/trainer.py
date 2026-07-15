@@ -18,7 +18,13 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import partial_chamfer_distance
+from geort.loss import partial_chamfer_distance, distance_preservation
+from geort.keypoint_normalization import (
+    fit_finger_normalization,
+    normalize_finger_points,
+    normalize_finger_points_torch,
+    normalization_stats_to_json,
+)
 from geort.formatter import HandFormatter
 from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointDataset
 from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
@@ -138,6 +144,7 @@ def should_save_epoch_checkpoint(epoch, n_epoch, save_every=0):
 def prepare_human_training_dataset(
     human_data_path,
     human_ids,
+    finger_names,
     *,
     mcp1_fist_prior_enabled=False,
     mcp1_fist_prior_top_fraction=0.05,
@@ -162,7 +169,13 @@ def prepare_human_training_dataset(
             f"Frame weights length {weights.shape} does not match frame count {selected_points.shape[0]}"
         )
 
-    frame_fields = None
+    # Per-finger normalization: fit from the full human dataset once,
+    # then normalize each finger independently into [-1, 1].
+    human_stats = fit_finger_normalization(selected_points, finger_names)
+    normalized_points = normalize_finger_points(selected_points, finger_names, human_stats)
+
+    # Keep metric points for pinch loss which uses physical thresholds.
+    frame_fields = {"metric_point": selected_points}
     if mcp1_fist_prior_enabled:
         mask = compute_mcp1_fist_prior_mask(
             human_points,
@@ -171,9 +184,9 @@ def prepare_human_training_dataset(
             pip_weight=mcp1_fist_prior_pip_weight,
             dip_weight=mcp1_fist_prior_dip_weight,
         )
-        frame_fields = {"mcp1_fist_prior_mask": mask}
+        frame_fields["mcp1_fist_prior_mask"] = mask
 
-    return FramePointDataset(selected_points, frame_fields=frame_fields), weights
+    return FramePointDataset(normalized_points, frame_fields=frame_fields), weights, human_stats
 
 
 def get_float_list_from_np(np_vector):
@@ -349,6 +362,7 @@ class GeoRTTrainer:
         hand_model_name = self.config["name"]
 
         w_chamfer = kwargs.get("w_chamfer", 80.0)
+        w_distance = kwargs.get("w_distance", 1.0)
         w_curvature = kwargs.get("w_curvature", 0.1)
         w_collision = kwargs.get("w_collision", 0.0)
         w_pinch = kwargs.get("w_pinch", 1.0)
@@ -401,11 +415,18 @@ class GeoRTTrainer:
             if chamfer_target != "uniform" or chamfer_target_path is not None
             else None
         )
-        robot_points = self.get_robot_pointcloud(
+        robot_points_metric = self.get_robot_pointcloud(
             robot_keypoint_names,
             chamfer_target=chamfer_target,
             chamfer_target_path=effective_chamfer_target_path,
         )
+        finger_names = keypoint_info["finger"]
+        robot_stats = fit_finger_normalization(
+            robot_points_metric.transpose(1, 0, 2), finger_names
+        )
+        robot_points = normalize_finger_points(
+            robot_points_metric.transpose(1, 0, 2), finger_names, robot_stats
+        ).transpose(1, 0, 2)
         metadata_target_path = (
             resolved_chamfer_target.path
             if effective_chamfer_target_path is not None
@@ -419,6 +440,7 @@ class GeoRTTrainer:
             n_epoch=n_epoch,
             loss_weights={
                 "w_chamfer": w_chamfer,
+                "w_distance": w_distance,
                 "w_curvature": w_curvature,
                 "w_collision": w_collision,
                 "w_pinch": w_pinch,
@@ -449,15 +471,30 @@ class GeoRTTrainer:
         for robot_keypoint_name, human_id in zip(robot_keypoint_names, human_finger_idxes):
             print(f"Robot Keypoint {robot_keypoint_name}: Human Id: {human_id}")
 
-        point_dataset_human, human_frame_weights = prepare_human_training_dataset(
+        point_dataset_human, human_frame_weights, human_stats = prepare_human_training_dataset(
             human_data_path,
             human_finger_idxes,
+            finger_names,
             mcp1_fist_prior_enabled=mcp1_fist_prior_enabled,
             mcp1_fist_prior_top_fraction=mcp1_fist_prior_top_fraction,
             mcp1_fist_prior_mcp_weight=mcp1_fist_prior_mcp_weight,
             mcp1_fist_prior_pip_weight=mcp1_fist_prior_pip_weight,
             mcp1_fist_prior_dip_weight=mcp1_fist_prior_dip_weight,
         )
+        normalization_metadata = {
+            "schema_version": 1,
+            "keypoint_type": "tip",
+            "keypoint_names": keypoint_info["name"],
+            "keypoint_links": robot_keypoint_names,
+            "human_ids": human_finger_idxes,
+            "finger_names": finger_names,
+            "human_data_source": str(human_data_path),
+            "human": normalization_stats_to_json(human_stats),
+            "robot": normalization_stats_to_json(robot_stats),
+        }
+        save_json(normalization_metadata, Path(save_dir) / "normalization.json")
+        if update_latest:
+            save_json(normalization_metadata, Path(last_save_dir) / "normalization.json")
         if human_frame_weights is not None:
             sampler = WeightedRandomSampler(
                 weights=torch.from_numpy(human_frame_weights).double(),
@@ -476,26 +513,35 @@ class GeoRTTrainer:
 
                 mcp1_fist_prior_mask = None
                 if isinstance(batch, dict):
-                    point = batch["point"].cuda() # [B, N, 3]
+                    point = batch["point"].cuda()  # normalized [B, K, 3]
+                    metric_point = batch["metric_point"].cuda()  # metric [B, K, 3]
                     if "mcp1_fist_prior_mask" in batch:
                         mcp1_fist_prior_mask = batch["mcp1_fist_prior_mask"].cuda()
                 else:
-                    point = batch.cuda() # [B, N, 3]
-                joint = ik_model(point) # [B, DOF]
-                embedded_point = fk_model(joint) # [B, N, 3]
+                    point = batch.cuda()
+                    metric_point = point
+                joint = ik_model(point)  # [B, DOF]
+                embedded_metric = fk_model(joint)  # metric [B, K, 3]
+                embedded_point = normalize_finger_points_torch(
+                    embedded_metric, finger_names, robot_stats
+                )  # normalized [B, K, 3]
 
-                # [Pinch Loss]
-                pinch_loss = compute_tip_pinch_loss(point, embedded_point, pinch_pairs, threshold=pinch_threshold)
+                # [Pinch Loss] — uses metric space (physical threshold in meters).
+                pinch_loss = compute_tip_pinch_loss(metric_point, embedded_metric, pinch_pairs, threshold=pinch_threshold)
 
                 # [Curvature loss] -- Ensuring flatness.
+                # Perturb in normalized space (≈1% of [-1, 1] range).
                 direction = F.normalize(torch.randn_like(point), dim=-1, p=2)
-                scale = 0.002
-                delta1 = direction * scale
+                delta1 = direction * 0.02
                 point_delta_1p = point + delta1 
                 point_delta_1n = point - delta1 
 
-                embedded_point_p = fk_model(ik_model(point_delta_1p))
-                embedded_point_n = fk_model(ik_model(point_delta_1n))
+                embedded_point_p = normalize_finger_points_torch(
+                    fk_model(ik_model(point_delta_1p)), finger_names, robot_stats
+                )
+                embedded_point_n = normalize_finger_points_torch(
+                    fk_model(ik_model(point_delta_1n)), finger_names, robot_stats
+                )
                 curvature_by_keypoint = ((embedded_point_p + embedded_point_n - 2 * embedded_point) ** 2).mean(dim=(0, 2))
                 curvature_loss = curvature_by_keypoint.mean()
                 
@@ -508,13 +554,20 @@ class GeoRTTrainer:
                     chamfer_by_keypoint.append(partial_chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
                 chamfer_loss = torch.stack(chamfer_by_keypoint).mean()
 
-                # [Direction Loss]
+                # [Distance Preservation]
+                # Per-finger isometry: penalize changes in pairwise distances
+                # among the batch of fingertip positions before vs after mapping.
+                distance_loss = distance_preservation(point, embedded_point)
+
+                # [Direction Loss] — perturb in normalized space.
                 direction = F.normalize(torch.randn_like(point), dim=-1, p=2)
-                scale = 0.001 + torch.rand(point.size(0)).cuda().unsqueeze(-1).unsqueeze(-1) * 0.01
+                scale = 0.01 + torch.rand(point.size(0), 1, 1, device=point.device) * 0.1
                 point_delta = point + direction * scale 
 
                 joint_delta = ik_model(point_delta)
-                embedded_point_delta = fk_model(joint_delta)
+                embedded_point_delta = normalize_finger_points_torch(
+                    fk_model(joint_delta), finger_names, robot_stats
+                )
 
                 d1 = point_delta - point
                 d2 = embedded_point_delta - embedded_point
@@ -549,6 +602,7 @@ class GeoRTTrainer:
 
                 loss = direction_loss + \
                        chamfer_loss * w_chamfer + \
+                       distance_loss * w_distance + \
                        curvature_loss * w_curvature + \
                        collision_loss * w_collision + \
                        pinch_loss * w_pinch + \
@@ -563,6 +617,7 @@ class GeoRTTrainer:
                         f"Epoch {epoch} | Losses"
                         f" - Direction: {format_loss(direction_loss.item())}"
                         f" - P-Chamfer: {format_loss(chamfer_loss.item())}"
+                        f" - Distance: {format_loss(distance_loss.item())}"
                         f" - Curvature: {format_loss(curvature_loss.item())}"
                         f" - Collision: {format_loss(collision_loss.item())}"
                         f" - Pinch: {format_loss(pinch_loss.item())}"
@@ -590,6 +645,7 @@ if __name__ == '__main__':
     parser.add_argument('-ckpt_tag', type=str, default='')
 
     parser.add_argument('--w_chamfer', type=float, default=80.0)
+    parser.add_argument('--w_distance', type=float, default=1.0)
     parser.add_argument('--w_curvature', type=float, default=0.1)
     parser.add_argument('--w_collision', type=float, default=0.0)
     parser.add_argument('--w_pinch', type=float, default=1.0)
@@ -617,8 +673,9 @@ if __name__ == '__main__':
     trainer.train(
         human_data_path, 
         tag=args.ckpt_tag, 
-        w_chamfer=args.w_chamfer, 
-        w_curvature=args.w_curvature, 
+        w_chamfer=args.w_chamfer,
+        w_distance=args.w_distance,
+        w_curvature=args.w_curvature,
         w_collision=args.w_collision,
         w_pinch=args.w_pinch,
         pinch_threshold=args.pinch_threshold,
