@@ -589,7 +589,7 @@
     <child link="F2-L-MCP2" />
     <origin xyz="0.04512 0.078019 0.00395" rpy="3.1416 0 2.8798" />
     <axis xyz="0 0 1" />
-    <limit lower="-0.380431" upper="0.087049" effort="6.0" velocity="3.59" />
+    <limit lower="-0.61" upper="0.61" effort="6.0" velocity="3.59" />
     <dynamics damping="0.0836" friction="0.1200" />
   </joint>
 
@@ -625,7 +625,7 @@
     <child link="F3-L-MCP2" />
     <origin xyz="0.025553 0.083234 0.00395" rpy="3.1416 0 3.1416" />
     <axis xyz="0 0 1" />
-    <limit lower="-0.242572" upper="0.204627" effort="6.0" velocity="3.59" />
+    <limit lower="-0.61" upper="0.61" effort="6.0" velocity="3.59" />
     <dynamics damping="0.0836" friction="0.1200" />
   </joint>
 
@@ -661,7 +661,7 @@
     <child link="F4-L-MCP2" />
     <origin xyz="0.0059875 0.078019 0.00395" rpy="3.1416 0 3.4034" />
     <axis xyz="0 0 1" />
-    <limit lower="-0.498692" upper="0.477526" effort="6.0" velocity="3.59" />
+    <limit lower="-0.61" upper="0.61" effort="6.0" velocity="3.59" />
     <dynamics damping="0.0836" friction="0.1200" />
   </joint>
 
@@ -697,7 +697,7 @@
     <child link="F5-L-MCP2" />
     <origin xyz="-0.01361 0.063366 0.00395" rpy="3.1416 0 3.7347" />
     <axis xyz="0 0 1" />
-    <limit lower="-0.440455" upper="0.61" effort="6.0" velocity="3.59" />
+    <limit lower="-0.61" upper="0.61" effort="6.0" velocity="3.59" />
     <dynamics damping="0.0836" friction="0.1200" />
   </joint>
 
