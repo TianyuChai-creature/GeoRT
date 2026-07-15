@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import numpy as np
+import json
 # sapien is used indirectly via HandKinematicModel (geort/env/hand.py).
 # No direct sapien calls remain in trainer.py after SAPIEN 3 migration.
 from torch.utils.data import DataLoader, WeightedRandomSampler
@@ -391,6 +392,15 @@ class GeoRTTrainer:
         w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
         synergy_weight = float(kwargs.get("synergy_weight", 0.01))
         synergy_lambda = float(kwargs.get("synergy_lambda", 2.0))
+        # Load PCA synergy reference if available (data-driven mode).
+        pca_synergy_path = kwargs.get("pca_synergy_path", None)
+        synergy_pca_params = None
+        if pca_synergy_path is not None and Path(pca_synergy_path).exists():
+            synergy_pca_params = json.loads(
+                Path(pca_synergy_path).read_text()
+            ).get("pca_synergy", None)
+            if synergy_pca_params is not None:
+                print(f"Using PCA synergy reference from {pca_synergy_path}")
         mcp1_fist_prior_top_fraction = kwargs.get("mcp1_fist_prior_top_fraction", 0.05)
         mcp1_fist_prior_target_alpha = kwargs.get("mcp1_fist_prior_target_alpha", 0.5)
         mcp1_fist_prior_mcp_weight = kwargs.get("mcp1_fist_prior_mcp_weight", 2.0)
@@ -613,7 +623,9 @@ class GeoRTTrainer:
                 if synergy_weight > 0.0:
                     joint_phys = joint_lower_limit_t + (joint + 1.0) * joint_half_range_t
                     synergy_loss_val, synergy_residuals = synergy_loss(
-                        joint_phys, lam=synergy_lambda
+                        joint_phys,
+                        lam=synergy_lambda,
+                        pca_params=synergy_pca_params,
                     )
                 else:
                     synergy_loss_val = torch.zeros((), device=joint.device)
@@ -667,9 +679,18 @@ class GeoRTTrainer:
                         f" - Pinch: {format_loss(pinch_loss.item())}"
                         f" - MCP1FistPrior: {format_loss(mcp1_fist_prior_loss.item())}"
                         f" - Synergy: {format_loss(synergy_loss_val.item())}"
-                        f" β12={synergy_residuals['beta1_beta2_mean_abs']:.4f}"
-                        f" β13={synergy_residuals['beta1_lambda_beta3_mean_abs']:.4f}"
                     )
+                    if synergy_pca_params is not None:
+                        dev_str = " ".join(
+                            f"{k.split('_')[0]}={v:.3f}"
+                            for k, v in synergy_residuals.items()
+                        )
+                        print(f"        PCA dev: {dev_str}")
+                    else:
+                        print(
+                            f"        β12={synergy_residuals.get('beta1_beta2_mean_abs', 0):.4f}"
+                            f" β13={synergy_residuals.get('beta1_lambda_beta3_mean_abs', 0):.4f}"
+                        )
 
 
             # Saving the checkpoint.
@@ -710,7 +731,9 @@ if __name__ == '__main__':
     parser.add_argument('--synergy_weight', type=float, default=0.01,
                         help='Weight for F2-F5 bending synergy regularisation; 0 disables.')
     parser.add_argument('--synergy_lambda', type=float, default=2.0,
-                        help='Synergy ratio λ for β1=λ·β3 constraint.')
+                        help='Synergy ratio λ for β1=λ·β3 constraint (hand-crafted mode only).')
+    parser.add_argument('--pca_synergy_path', type=str, default=None,
+                        help='Path to pca_synergy.json for data-driven synergy reference.')
     parser.add_argument('--save_every', type=int, default=0, help='Save epoch_N.pth every N epochs; 0 keeps only last.pth.')
     parser.add_argument('--chamfer_target', choices=('uniform', 'human'), default='uniform', help='Chamfer target cloud source.')
     parser.add_argument('--chamfer_target_path', default=None, help='Explicit chamfer target .npz path. Human defaults to data/<hand>_humanshaped.npz.')
@@ -759,6 +782,7 @@ if __name__ == '__main__':
         mcp1_fist_prior_dip_weight=args.mcp1_fist_prior_dip_weight,
         synergy_weight=args.synergy_weight,
         synergy_lambda=args.synergy_lambda,
+        pca_synergy_path=args.pca_synergy_path,
         save_every=args.save_every,
         chamfer_target=args.chamfer_target,
         chamfer_target_path=args.chamfer_target_path,

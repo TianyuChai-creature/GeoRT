@@ -126,34 +126,66 @@ _SYNERGY_INDICES: tuple[tuple[int, int, int], ...] = (
 )
 
 
-def synergy_loss(joint_physical: torch.Tensor, lam: float = 2.0):
+def synergy_loss(
+    joint_physical: torch.Tensor,
+    lam: float = 2.0,
+    pca_params: dict | None = None,
+):
     """Bending-joint synergy regularisation for F2–F5.
 
-    Penalises deviation from β1=β2=λ·β3 on the four non-thumb fingers:
-      L_syn = mean_over_fingers (β1-β2)² + (β1-λ·β3)²
+    Two modes:
+      - pca_params=None: hand-crafted  (β1-β2)² + (β1-λ·β3)²
+      - pca_params given: PCA deviation  ||β - proj_PCA(β)||²
 
     Args:
         joint_physical: Joint angles in physical radians [B, 20].
-        lam: Synergy ratio λ (default 2.0).
+        lam: Synergy ratio λ (only used in hand-crafted mode).
+        pca_params: Optional dict mapping finger_name → {mu, pc}
+            where mu [3] = mean of (β1,β2,β3) and pc [3] = principal component.
 
     Returns:
         (loss, residual_dict) tuple.
     """
     if joint_physical.shape[1] != 20:
         raise ValueError(f"Expected [B, 20], got {tuple(joint_physical.shape)}")
+
+    _FINGER_NAMES = ("index", "middle", "ring", "pinky")
+
     losses = []
-    beta12_res = []
-    beta13_res = []
-    for beta1_idx, beta2_idx, beta3_idx in _SYNERGY_INDICES:
+    residuals = {}
+    for fi, (beta1_idx, beta2_idx, beta3_idx) in enumerate(_SYNERGY_INDICES):
         b1 = joint_physical[:, beta1_idx]
         b2 = joint_physical[:, beta2_idx]
         b3 = joint_physical[:, beta3_idx]
-        losses.append((b1 - b2).square() + (b1 - lam * b3).square())
-        beta12_res.append((b1 - b2).abs().mean().item())
-        beta13_res.append((b1 - lam * b3).abs().mean().item())
+        B = torch.stack([b1, b2, b3], dim=1)  # [B, 3]
+
+        if pca_params is not None:
+            finger_name = _FINGER_NAMES[fi]
+            mu = torch.tensor(
+                pca_params[finger_name]["mu"],
+                device=joint_physical.device,
+                dtype=joint_physical.dtype,
+            )
+            pc = torch.tensor(
+                pca_params[finger_name]["pc"],
+                device=joint_physical.device,
+                dtype=joint_physical.dtype,
+            )
+            Bc = B - mu.unsqueeze(0)  # [B, 3]
+            t = (Bc * pc.unsqueeze(0)).sum(dim=1)  # [B]
+            proj = mu.unsqueeze(0) + t.unsqueeze(1) * pc.unsqueeze(0)  # [B, 3]
+            losses.append(((B - proj) ** 2).sum(dim=1))  # [B]
+            residuals[f"{finger_name}_dev"] = (
+                (B - proj).norm(dim=1).mean().item()
+            )
+        else:
+            losses.append((b1 - b2).square() + (b1 - lam * b3).square())
+            residuals["beta1_beta2_mean_abs"] = float(
+                (b1 - b2).abs().mean().item()
+            )
+            residuals["beta1_lambda_beta3_mean_abs"] = float(
+                (b1 - lam * b3).abs().mean().item()
+            )
+
     loss = torch.stack(losses, dim=1).mean()
-    residuals = {
-        "beta1_beta2_mean_abs": float(np.mean(beta12_res)),
-        "beta1_lambda_beta3_mean_abs": float(np.mean(beta13_res)),
-    }
     return loss, residuals
