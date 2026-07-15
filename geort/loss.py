@@ -84,3 +84,27 @@ def distance_preservation(points, mapped_points):
         squared_diff = (mapped_dists - orig_dists).square()
         losses.append(squared_diff[:, mask].mean())
     return torch.stack(losses).mean()
+
+
+def local_motion_loss(d_human, d_robot):
+    """Local motion preservation via negative cosine similarity.
+
+    L_motion = -1/|C| * sum_j ⟨T⁻¹(x_j)·Δx/‖Δx‖, T⁻¹(f_m(x_j))·Δf_m/‖Δf_m‖⟩
+
+    Masks out samples where mapped displacement ‖Δf_m‖ < 1e-6 (joint
+    saturation, mapping flat-regions) to avoid NaN from near-zero division.
+
+    Args:
+        d_human: Raw perturbation vectors in human space [B, K, 3].
+        d_robot: Raw perturbation vectors in robot space [B, K, 3].
+
+    Returns:
+        Scalar loss (negative mean cosine similarity over valid samples).
+    """
+    d_human_hat = F.normalize(d_human, dim=-1, p=2, eps=1e-8)
+    norm_r = d_robot.norm(dim=-1, keepdim=True)  # [B, K, 1]
+    valid = (norm_r.squeeze(-1) > 1e-6)  # [B, K]
+    if not valid.any():
+        return torch.zeros((), device=d_robot.device, dtype=d_robot.dtype)
+    cos = (d_human_hat * d_robot / norm_r.clamp(min=1e-8)).sum(-1)  # [B, K]
+    return -cos[valid].mean()

@@ -18,7 +18,7 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import partial_chamfer_distance, distance_preservation
+from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss
 from geort.keypoint_normalization import (
     fit_finger_normalization,
     normalize_finger_points,
@@ -364,6 +364,7 @@ class GeoRTTrainer:
         w_chamfer = kwargs.get("w_chamfer", 80.0)
         w_distance = kwargs.get("w_distance", 1.0)
         w_curvature = kwargs.get("w_curvature", 0.1)
+        motion_delta = float(kwargs.get("motion_delta", 0.01))
         w_collision = kwargs.get("w_collision", 0.0)
         w_pinch = kwargs.get("w_pinch", 1.0)
         pinch_threshold = kwargs.get("pinch_threshold", 0.015)
@@ -509,7 +510,7 @@ class GeoRTTrainer:
         # Training / Optimization
         for epoch in range(n_epoch):
             for batch_idx, batch in enumerate(point_dataloader):
-                direction_loss = 0
+                direction_loss = 0  # unused, kept for backward compat
 
                 mcp1_fist_prior_mask = None
                 if isinstance(batch, dict):
@@ -559,23 +560,20 @@ class GeoRTTrainer:
                 # among the batch of fingertip positions before vs after mapping.
                 distance_loss = distance_preservation(point, embedded_point)
 
-                # [Direction Loss] — perturb in normalized space.
+                # [Local Motion Preservation]
+                # T = I (identity local frame) for this version.
+                # TODO(Step 4): replace with per-finger local coordinate frames.
                 direction = F.normalize(torch.randn_like(point), dim=-1, p=2)
-                scale = 0.01 + torch.rand(point.size(0), 1, 1, device=point.device) * 0.1
-                point_delta = point + direction * scale 
+                point_delta = point + direction * motion_delta
 
                 joint_delta = ik_model(point_delta)
                 embedded_point_delta = normalize_finger_points_torch(
                     fk_model(joint_delta), finger_names, robot_stats
                 )
 
-                d1 = point_delta - point
-                d2 = embedded_point_delta - embedded_point
-                direction_by_keypoint = (
-                    F.normalize(d1, dim=-1, p=2, eps=1e-5)
-                    * F.normalize(d2, dim=-1, p=2, eps=1e-5)
-                ).sum(-1)
-                direction_loss = -direction_by_keypoint.mean()
+                d_human = point_delta - point
+                d_robot = embedded_point_delta - embedded_point
+                motion_loss = local_motion_loss(d_human, d_robot)
 
                 # [MCP1 fist prior]
                 if mcp1_fist_prior_mask is not None:
@@ -600,7 +598,7 @@ class GeoRTTrainer:
                 # collision Loss integration pending.
                 collision_loss = torch.tensor([0.0]).cuda()
 
-                loss = direction_loss + \
+                loss = motion_loss + \
                        chamfer_loss * w_chamfer + \
                        distance_loss * w_distance + \
                        curvature_loss * w_curvature + \
@@ -615,7 +613,7 @@ class GeoRTTrainer:
                 if batch_idx % 50 == 0:
                     print(
                         f"Epoch {epoch} | Losses"
-                        f" - Direction: {format_loss(direction_loss.item())}"
+                        f" - Motion: {format_loss(motion_loss.item())}"
                         f" - P-Chamfer: {format_loss(chamfer_loss.item())}"
                         f" - Distance: {format_loss(distance_loss.item())}"
                         f" - Curvature: {format_loss(curvature_loss.item())}"
@@ -647,6 +645,7 @@ if __name__ == '__main__':
     parser.add_argument('--w_chamfer', type=float, default=80.0)
     parser.add_argument('--w_distance', type=float, default=1.0)
     parser.add_argument('--w_curvature', type=float, default=0.1)
+    parser.add_argument('--motion_delta', type=float, default=0.01, help='Perturbation magnitude in normalized space (default 1%% of [-1,1] range).')
     parser.add_argument('--w_collision', type=float, default=0.0)
     parser.add_argument('--w_pinch', type=float, default=1.0)
     parser.add_argument('--pinch_threshold', type=float, default=0.015)
@@ -676,6 +675,7 @@ if __name__ == '__main__':
         w_chamfer=args.w_chamfer,
         w_distance=args.w_distance,
         w_curvature=args.w_curvature,
+        motion_delta=args.motion_delta,
         w_collision=args.w_collision,
         w_pinch=args.w_pinch,
         pinch_threshold=args.pinch_threshold,

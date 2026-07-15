@@ -196,6 +196,33 @@ def parse_config_keypoint_info(config):
     return out 
 
 
+def select_keypoint_types(keypoint_info, allowed_types=("tip",)):
+    """Return a self-consistent keypoint view containing only selected types."""
+    allowed_types = set(allowed_types)
+    selected = [
+        idx for idx, keypoint_type in enumerate(keypoint_info["type"])
+        if keypoint_type in allowed_types
+    ]
+    if not selected:
+        raise ValueError(f"No keypoints match types {sorted(allowed_types)}")
+
+    list_fields = ("name", "link", "offset", "joint", "human_id", "finger", "type", "weight")
+    out = {
+        field: [keypoint_info[field][idx] for idx in selected]
+        for field in list_fields
+    }
+    out["source_indices"] = selected
+    out["tip_indices"] = [idx for idx, value in enumerate(out["type"]) if value == "tip"]
+    out["pip_indices"] = [idx for idx, value in enumerate(out["type"]) if value == "pip"]
+
+    max_joint_idx = max(joint_idx for joints in out["joint"] for joint_idx in joints)
+    joint_order_proxy = range(max_joint_idx + 1)
+    out["finger_groups"] = _build_finger_groups(out["finger"], out["joint"], joint_order_proxy)
+    out["pinch_pairs"] = _build_pinch_pairs(out["finger"], out["type"])
+    out["segment_pairs"] = _build_segment_pairs(out["finger"], out["type"])
+    return out
+
+
 def parse_config_joint_limit(config):
     lower_limit = config["joint"]["lower"]
     upper_limit = config["joint"]["upper"]
