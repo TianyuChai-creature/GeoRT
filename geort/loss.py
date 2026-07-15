@@ -38,3 +38,20 @@ def chamfer_distance(input_points, target_points):
     chamfer_dist = torch.mean(min_dist_a, dim=1) + torch.mean(min_dist_b, dim=1)
     
     return chamfer_dist.mean()
+
+
+def partial_chamfer_distance(input_points, target_points):
+    """One-way mean nearest-neighbor L2 distance from input to target.
+
+    L_P-Chamfer = (1/|C_H|) * sum_j min_k ||f_m(x_j^H) - x_k^R||
+
+    Args:
+        input_points: Mapped human points [B, N, 3].
+        target_points: Robot target points [B, M, 3].
+
+    Returns:
+        Scalar partial Chamfer distance.
+    """
+    pairwise_distance = torch.cdist(input_points, target_points, p=2.0)  # [B, N, M]
+    min_distance, _ = pairwise_distance.min(dim=2)  # [B, N]
+    return min_distance.mean()

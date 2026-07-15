@@ -18,7 +18,7 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import chamfer_distance
+from geort.loss import partial_chamfer_distance
 from geort.formatter import HandFormatter
 from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointDataset
 from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
@@ -505,7 +505,7 @@ class GeoRTTrainer:
                 
                 chamfer_by_keypoint = []
                 for i in range(n_keypoints):
-                    chamfer_by_keypoint.append(chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
+                    chamfer_by_keypoint.append(partial_chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
                 chamfer_loss = torch.stack(chamfer_by_keypoint).mean()
 
                 # [Direction Loss]
@@ -562,7 +562,7 @@ class GeoRTTrainer:
                     print(
                         f"Epoch {epoch} | Losses"
                         f" - Direction: {format_loss(direction_loss.item())}"
-                        f" - Chamfer: {format_loss(chamfer_loss.item())}"
+                        f" - P-Chamfer: {format_loss(chamfer_loss.item())}"
                         f" - Curvature: {format_loss(curvature_loss.item())}"
                         f" - Collision: {format_loss(collision_loss.item())}"
                         f" - Pinch: {format_loss(pinch_loss.item())}"
