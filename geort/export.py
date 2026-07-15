@@ -9,7 +9,7 @@ from pathlib import Path
 from geort.formatter import HandFormatter
 from geort.model import IKModel
 from geort.utils.path import get_checkpoint_root
-from geort.utils.config_utils import load_json, parse_config_keypoint_info, parse_config_joint_limit
+from geort.utils.config_utils import load_json, parse_config_keypoint_info, parse_config_joint_limit, select_keypoint_types
 
 
 class GeoRTRetargetingModel:
@@ -18,7 +18,9 @@ class GeoRTRetargetingModel:
     '''
     def __init__(self, model_path, config_path):
         config = load_json(config_path)
-        keypoint_info = parse_config_keypoint_info(config)
+        keypoint_info = select_keypoint_types(
+            parse_config_keypoint_info(config), allowed_types=("tip",)
+        )
         joint_lower_limit, joint_upper_limit = parse_config_joint_limit(config)
         print(keypoint_info["joint"])
         self.human_ids = keypoint_info["human_id"]

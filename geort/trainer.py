@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from geort.utils.hand_utils import get_entity_by_name, get_active_joints, get_active_joint_indices
 from geort.utils.path import get_human_data
 from geort.dataset_manifest import maybe_load_dataset_manifest
-from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json
+from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
 from geort.loss import chamfer_distance
@@ -43,21 +43,7 @@ def format_loss(value):
     return f"{value:.4e}" if math.fabs(value) < 1e-3 else f"{value:.4f}"
 
 
-def weighted_keypoint_mean(loss_by_keypoint, weights):
-    weights = weights.to(device=loss_by_keypoint.device, dtype=loss_by_keypoint.dtype)
 
-    if loss_by_keypoint.dim() == 3:
-        loss_by_keypoint = loss_by_keypoint.mean(dim=-1)
-
-    if loss_by_keypoint.dim() == 1:
-        return (loss_by_keypoint * weights).sum() / weights.sum().clamp_min(1e-7)
-
-    if loss_by_keypoint.dim() == 2:
-        return (loss_by_keypoint * weights.unsqueeze(0)).sum() / (
-            weights.sum().clamp_min(1e-7) * loss_by_keypoint.size(0)
-        )
-
-    raise ValueError(f"Unsupported keypoint loss shape: {tuple(loss_by_keypoint.shape)}")
 
 
 def compute_tip_pinch_loss(point, embedded_point, pinch_pairs, threshold=0.015):
@@ -73,18 +59,6 @@ def compute_tip_pinch_loss(point, embedded_point, pinch_pairs, threshold=0.015):
 
     return pinch_loss
 
-
-def compute_finger_segment_direction_loss(point, embedded_point, segment_pairs):
-    if not segment_pairs:
-        return torch.zeros((), device=point.device, dtype=point.dtype)
-
-    losses = []
-    for pip_idx, tip_idx in segment_pairs:
-        human_dir = F.normalize(point[:, tip_idx, :] - point[:, pip_idx, :], dim=-1, p=2, eps=1e-5)
-        robot_dir = F.normalize(embedded_point[:, tip_idx, :] - embedded_point[:, pip_idx, :], dim=-1, p=2, eps=1e-5)
-        losses.append(1.0 - (human_dir * robot_dir).sum(dim=-1))
-
-    return torch.stack(losses, dim=1).mean()
 
 
 def non_thumb_mcp1_joint_indices(joint_order):
@@ -262,7 +236,7 @@ class GeoRTTrainer:
         return out 
 
     def get_keypoint_info(self):
-        return parse_config_keypoint_info(self.config)
+        return select_keypoint_types(parse_config_keypoint_info(self.config), allowed_types=("tip",))
 
     def generate_robot_kinematics_dataset(self, n_total=100000, save=True):
         '''
@@ -379,7 +353,6 @@ class GeoRTTrainer:
         w_collision = kwargs.get("w_collision", 0.0)
         w_pinch = kwargs.get("w_pinch", 1.0)
         pinch_threshold = kwargs.get("pinch_threshold", 0.015)
-        w_segment_direction = kwargs.get("w_segment_direction", 0.5)
         w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
         mcp1_fist_prior_top_fraction = kwargs.get("mcp1_fist_prior_top_fraction", 0.05)
         mcp1_fist_prior_target_alpha = kwargs.get("mcp1_fist_prior_target_alpha", 0.5)
@@ -449,7 +422,6 @@ class GeoRTTrainer:
                 "w_curvature": w_curvature,
                 "w_collision": w_collision,
                 "w_pinch": w_pinch,
-                "w_segment_direction": w_segment_direction,
                 "w_mcp1_fist_prior": w_mcp1_fist_prior,
             },
             cli_args={
@@ -471,9 +443,7 @@ class GeoRTTrainer:
             save_training_metadata(Path(last_save_dir) / "training_metadata.json", training_metadata)
 
         human_finger_idxes = keypoint_info["human_id"]
-        keypoint_weights = torch.tensor(keypoint_info["weight"], dtype=torch.float32).cuda()
         pinch_pairs = keypoint_info["pinch_pairs"]
-        segment_pairs = keypoint_info["segment_pairs"]
         mcp1_prior_joint_indices = non_thumb_mcp1_joint_indices(self.config["joint_order"])
         mcp1_fist_prior_enabled = w_mcp1_fist_prior > 0.0
         for robot_keypoint_name, human_id in zip(robot_keypoint_names, human_finger_idxes):
@@ -515,8 +485,6 @@ class GeoRTTrainer:
                 embedded_point = fk_model(joint) # [B, N, 3]
 
                 # [Pinch Loss]
-                # Only fingertip keypoints participate in pinch supervision. PIP
-                # keypoints are auxiliary pose constraints and must not trigger pinch.
                 pinch_loss = compute_tip_pinch_loss(point, embedded_point, pinch_pairs, threshold=pinch_threshold)
 
                 # [Curvature loss] -- Ensuring flatness.
@@ -529,7 +497,7 @@ class GeoRTTrainer:
                 embedded_point_p = fk_model(ik_model(point_delta_1p))
                 embedded_point_n = fk_model(ik_model(point_delta_1n))
                 curvature_by_keypoint = ((embedded_point_p + embedded_point_n - 2 * embedded_point) ** 2).mean(dim=(0, 2))
-                curvature_loss = weighted_keypoint_mean(curvature_by_keypoint, keypoint_weights)
+                curvature_loss = curvature_by_keypoint.mean()
                 
                 # [Chamfer loss]
                 selected_idx = np.random.randint(0, robot_points.shape[1], 2048) 
@@ -538,7 +506,7 @@ class GeoRTTrainer:
                 chamfer_by_keypoint = []
                 for i in range(n_keypoints):
                     chamfer_by_keypoint.append(chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
-                chamfer_loss = weighted_keypoint_mean(torch.stack(chamfer_by_keypoint), keypoint_weights)
+                chamfer_loss = torch.stack(chamfer_by_keypoint).mean()
 
                 # [Direction Loss]
                 direction = F.normalize(torch.randn_like(point), dim=-1, p=2)
@@ -554,12 +522,7 @@ class GeoRTTrainer:
                     F.normalize(d1, dim=-1, p=2, eps=1e-5)
                     * F.normalize(d2, dim=-1, p=2, eps=1e-5)
                 ).sum(-1)
-                direction_loss = -weighted_keypoint_mean(direction_by_keypoint, keypoint_weights)
-
-                # [Finger segment direction loss]
-                # Align each finger's pip->tip direction per pose without using
-                # human hand scale as an absolute position target.
-                segment_direction_loss = compute_finger_segment_direction_loss(point, embedded_point, segment_pairs)
+                direction_loss = -direction_by_keypoint.mean()
 
                 # [MCP1 fist prior]
                 if mcp1_fist_prior_mask is not None:
@@ -589,7 +552,6 @@ class GeoRTTrainer:
                        curvature_loss * w_curvature + \
                        collision_loss * w_collision + \
                        pinch_loss * w_pinch + \
-                       segment_direction_loss * w_segment_direction + \
                        mcp1_fist_prior_loss * w_mcp1_fist_prior
 
                 ik_optim.zero_grad()
@@ -604,7 +566,6 @@ class GeoRTTrainer:
                         f" - Curvature: {format_loss(curvature_loss.item())}"
                         f" - Collision: {format_loss(collision_loss.item())}"
                         f" - Pinch: {format_loss(pinch_loss.item())}"
-                        f" - SegmentDirection: {format_loss(segment_direction_loss.item())}"
                         f" - MCP1FistPrior: {format_loss(mcp1_fist_prior_loss.item())}"
                     )
 
@@ -633,7 +594,6 @@ if __name__ == '__main__':
     parser.add_argument('--w_collision', type=float, default=0.0)
     parser.add_argument('--w_pinch', type=float, default=1.0)
     parser.add_argument('--pinch_threshold', type=float, default=0.015)
-    parser.add_argument('--w_segment_direction', type=float, default=0.5)
     parser.add_argument('--w_mcp1_fist_prior', type=float, default=0.0, help='Weight for strong-fist MCP1 prior loss; 0 disables it.')
     parser.add_argument('--mcp1_fist_prior_top_fraction', type=float, default=0.05, help='Fraction of strongest fist frames used by MCP1 prior.')
     parser.add_argument('--mcp1_fist_prior_target_alpha', type=float, default=0.5, help='Blend from predicted normalized MCP1 toward upper limit for prior target.')
@@ -662,7 +622,6 @@ if __name__ == '__main__':
         w_collision=args.w_collision,
         w_pinch=args.w_pinch,
         pinch_threshold=args.pinch_threshold,
-        w_segment_direction=args.w_segment_direction,
         w_mcp1_fist_prior=args.w_mcp1_fist_prior,
         mcp1_fist_prior_top_fraction=args.mcp1_fist_prior_top_fraction,
         mcp1_fist_prior_target_alpha=args.mcp1_fist_prior_target_alpha,
