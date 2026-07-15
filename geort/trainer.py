@@ -18,7 +18,7 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss
+from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss
 from geort.keypoint_normalization import (
     fit_finger_normalization,
     normalize_finger_points,
@@ -389,6 +389,8 @@ class GeoRTTrainer:
         w_pinch = kwargs.get("w_pinch", 1.0)
         pinch_threshold = kwargs.get("pinch_threshold", 0.015)
         w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
+        synergy_weight = float(kwargs.get("synergy_weight", 0.01))
+        synergy_lambda = float(kwargs.get("synergy_lambda", 2.0))
         mcp1_fist_prior_top_fraction = kwargs.get("mcp1_fist_prior_top_fraction", 0.05)
         mcp1_fist_prior_target_alpha = kwargs.get("mcp1_fist_prior_target_alpha", 0.5)
         mcp1_fist_prior_mcp_weight = kwargs.get("mcp1_fist_prior_mcp_weight", 2.0)
@@ -411,6 +413,13 @@ class GeoRTTrainer:
 
         # Save the config including robot joint info to the checkpoint directory.
         joint_lower_limit, joint_upper_limit = self.hand.get_joint_limit()
+        joint_lower_limit_t = torch.from_numpy(
+            np.array(joint_lower_limit, dtype=np.float32)
+        ).cuda()
+        joint_upper_limit_t = torch.from_numpy(
+            np.array(joint_upper_limit, dtype=np.float32)
+        ).cuda()
+        joint_half_range_t = (joint_upper_limit_t - joint_lower_limit_t) / 2.0
 
         export_config = self.config.copy()
         export_config["joint"] = {
@@ -467,6 +476,7 @@ class GeoRTTrainer:
                 "w_collision": w_collision,
                 "w_pinch": w_pinch,
                 "w_mcp1_fist_prior": w_mcp1_fist_prior,
+                "synergy_weight": synergy_weight,
             },
             cli_args={
                 "tag": exp_tag,
@@ -482,6 +492,7 @@ class GeoRTTrainer:
                 "mcp1_fist_prior_mcp_weight": mcp1_fist_prior_mcp_weight,
                 "mcp1_fist_prior_pip_weight": mcp1_fist_prior_pip_weight,
                 "mcp1_fist_prior_dip_weight": mcp1_fist_prior_dip_weight,
+                "synergy_lambda": synergy_lambda,
             },
         )
         save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
@@ -598,6 +609,16 @@ class GeoRTTrainer:
                 d_robot = embedded_point_delta - embedded_point
                 motion_loss, motion_invalid_frac = local_motion_loss(d_human, d_robot)
 
+                # [Synergy regularisation] — F2-F5 bending joints only.
+                if synergy_weight > 0.0:
+                    joint_phys = joint_lower_limit_t + (joint + 1.0) * joint_half_range_t
+                    synergy_loss_val, synergy_residuals = synergy_loss(
+                        joint_phys, lam=synergy_lambda
+                    )
+                else:
+                    synergy_loss_val = torch.zeros((), device=joint.device)
+                    synergy_residuals = {"beta1_beta2_mean_abs": 0.0, "beta1_lambda_beta3_mean_abs": 0.0}
+
                 # [MCP1 fist prior]
                 if mcp1_fist_prior_mask is not None:
                     mcp1_fist_prior_loss = compute_mcp1_fist_prior_loss(
@@ -625,6 +646,7 @@ class GeoRTTrainer:
                        chamfer_loss * w_chamfer + \
                        distance_loss * w_distance + \
                        curvature_loss * w_curvature + \
+                       synergy_loss_val * synergy_weight + \
                        collision_loss * w_collision + \
                        pinch_loss * w_pinch + \
                        mcp1_fist_prior_loss * w_mcp1_fist_prior
@@ -644,6 +666,9 @@ class GeoRTTrainer:
                         f" - Collision: {format_loss(collision_loss.item())}"
                         f" - Pinch: {format_loss(pinch_loss.item())}"
                         f" - MCP1FistPrior: {format_loss(mcp1_fist_prior_loss.item())}"
+                        f" - Synergy: {format_loss(synergy_loss_val.item())}"
+                        f" β12={synergy_residuals['beta1_beta2_mean_abs']:.4f}"
+                        f" β13={synergy_residuals['beta1_lambda_beta3_mean_abs']:.4f}"
                     )
 
 
@@ -682,6 +707,10 @@ if __name__ == '__main__':
     parser.add_argument('--mcp1_fist_prior_mcp_weight', type=float, default=2.0)
     parser.add_argument('--mcp1_fist_prior_pip_weight', type=float, default=1.0)
     parser.add_argument('--mcp1_fist_prior_dip_weight', type=float, default=0.7)
+    parser.add_argument('--synergy_weight', type=float, default=0.01,
+                        help='Weight for F2-F5 bending synergy regularisation; 0 disables.')
+    parser.add_argument('--synergy_lambda', type=float, default=2.0,
+                        help='Synergy ratio λ for β1=λ·β3 constraint.')
     parser.add_argument('--save_every', type=int, default=0, help='Save epoch_N.pth every N epochs; 0 keeps only last.pth.')
     parser.add_argument('--chamfer_target', choices=('uniform', 'human'), default='uniform', help='Chamfer target cloud source.')
     parser.add_argument('--chamfer_target_path', default=None, help='Explicit chamfer target .npz path. Human defaults to data/<hand>_humanshaped.npz.')
@@ -728,6 +757,8 @@ if __name__ == '__main__':
         mcp1_fist_prior_mcp_weight=args.mcp1_fist_prior_mcp_weight,
         mcp1_fist_prior_pip_weight=args.mcp1_fist_prior_pip_weight,
         mcp1_fist_prior_dip_weight=args.mcp1_fist_prior_dip_weight,
+        synergy_weight=args.synergy_weight,
+        synergy_lambda=args.synergy_lambda,
         save_every=args.save_every,
         chamfer_target=args.chamfer_target,
         chamfer_target_path=args.chamfer_target_path,

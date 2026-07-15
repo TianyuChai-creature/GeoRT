@@ -6,6 +6,7 @@
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 
 def chamfer_distance(input_points, target_points):
     """
@@ -112,3 +113,47 @@ def local_motion_loss(d_human, d_robot):
         return torch.zeros((), device=d_robot.device, dtype=d_robot.dtype), 1.0
     cos = (d_human_hat * d_robot / norm_r.clamp(min=1e-8)).sum(-1)  # [B, K]
     return -cos[valid].mean(), invalid_frac
+
+
+# F2–F5 bending joint indices in the 20-DOF config joint_order.
+# Per finger: [β1=MCP1, β2=PIP, β3=DIP].  MCP2 (abduction α) excluded.
+# Thumb (F1, indices 0–3) excluded — λ=2 synergy does not apply.
+_SYNERGY_INDICES: tuple[tuple[int, int, int], ...] = (
+    (5, 6, 7),    # F2: MCP1, PIP, DIP
+    (9, 10, 11),  # F3
+    (13, 14, 15), # F4
+    (17, 18, 19), # F5
+)
+
+
+def synergy_loss(joint_physical: torch.Tensor, lam: float = 2.0):
+    """Bending-joint synergy regularisation for F2–F5.
+
+    Penalises deviation from β1=β2=λ·β3 on the four non-thumb fingers:
+      L_syn = mean_over_fingers (β1-β2)² + (β1-λ·β3)²
+
+    Args:
+        joint_physical: Joint angles in physical radians [B, 20].
+        lam: Synergy ratio λ (default 2.0).
+
+    Returns:
+        (loss, residual_dict) tuple.
+    """
+    if joint_physical.shape[1] != 20:
+        raise ValueError(f"Expected [B, 20], got {tuple(joint_physical.shape)}")
+    losses = []
+    beta12_res = []
+    beta13_res = []
+    for beta1_idx, beta2_idx, beta3_idx in _SYNERGY_INDICES:
+        b1 = joint_physical[:, beta1_idx]
+        b2 = joint_physical[:, beta2_idx]
+        b3 = joint_physical[:, beta3_idx]
+        losses.append((b1 - b2).square() + (b1 - lam * b3).square())
+        beta12_res.append((b1 - b2).abs().mean().item())
+        beta13_res.append((b1 - lam * b3).abs().mean().item())
+    loss = torch.stack(losses, dim=1).mean()
+    residuals = {
+        "beta1_beta2_mean_abs": float(np.mean(beta12_res)),
+        "beta1_lambda_beta3_mean_abs": float(np.mean(beta13_res)),
+    }
+    return loss, residuals
