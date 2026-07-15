@@ -10,6 +10,7 @@ from typing import Sequence
 
 import pytorch_kinematics as pk
 import torch
+import torch.nn as nn
 
 
 # Per-finger joint name blocks in the config joint_order (and URDF order).
@@ -32,10 +33,16 @@ TIP_LINK_NAMES: tuple[str, ...] = (
 )
 
 
-class AnalyticFK:
+class AnalyticFK(nn.Module):
     """Exact differentiable forward kinematics from a hand URDF.
 
-    Input:  normalized joint angles  [B, 20]  in [-1, 1] (config joint_order).
+    Input:  normalised joint angles  [B, 20]  in [-1, 1] (config joint_order).
+            Internally un-normalises to physical radians via
+                physical = lower + (normalised + 1) * (upper - lower) / 2.
+            The round-trip through float32 introduces ~1 μm tip-position noise;
+            keep motion_delta >= 0.002 (~0.1 mm) to stay above the noise floor
+            (see test_analytic_fk.py noise-floor calibration).
+
     Output: tip positions             [B,  5, 3] in metres (base_link frame).
 
     Supports batch, autograd, and follows the input device.
@@ -56,6 +63,7 @@ class AnalyticFK:
             tip_offsets:  Tip centre offsets in the distal link local frame,
                 one [x, y, z] per finger (default: zeros).
         """
+        super().__init__()
         with open(urdf_path) as fh:
             urdf_text = fh.read()
 
@@ -111,7 +119,6 @@ class AnalyticFK:
         self.register_buffer(
             "_upper", torch.tensor(joint_upper, dtype=torch.float32)
         )
-        self._half_range = (self._upper - self._lower) / 2.0
 
         # Verify 4-DOF per-finger contract.
         for fi, indices in enumerate(self._per_finger_indices):
@@ -138,16 +145,6 @@ class AnalyticFK:
             torch.tensor(tip_offsets, dtype=torch.float32).view(5, 3, 1),
         )
 
-    def register_buffer(self, name: str, tensor: torch.Tensor) -> None:
-        """Simulate nn.Module.register_buffer for plain-class compatibility."""
-        setattr(self, name, tensor)
-
-    def _to_device(self, device: torch.device) -> None:
-        self._lower = self._lower.to(device)
-        self._upper = self._upper.to(device)
-        self._half_range = self._half_range.to(device)
-        self._tip_offsets = self._tip_offsets.to(device)
-
     def forward(self, joint_normalized: torch.Tensor) -> torch.Tensor:
         """Compute tip positions from normalized joint angles.
 
@@ -164,11 +161,11 @@ class AnalyticFK:
             )
 
         device = joint_normalized.device
-        self._to_device(device)
+        self.to(device)
 
         # Unnormalise: [-1, 1] → physical radians.
-        # physical = lower + (normalized + 1) * half_range
-        physical = self._lower + (joint_normalized + 1.0) * self._half_range
+        half_range = (self._upper - self._lower) / 2.0
+        physical = self._lower + (joint_normalized + 1.0) * half_range
 
         # Build the joint dict for pytorch_kinematics.
         # All non-finger joints (WRIST-PALM-R, PALM-R) are set to zero.

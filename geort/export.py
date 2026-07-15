@@ -69,6 +69,13 @@ class GeoRTRetargetingModel:
         self.model.eval()
         self.qpos_normalizer = HandFormatter(joint_lower_limit, joint_upper_limit)
 
+        # Report FK backend used during training (if metadata is available).
+        metadata_path = Path(model_path).parent / "training_metadata.json"
+        if metadata_path.exists():
+            meta = load_json(metadata_path)
+            backend = meta.get("cli_args", {}).get("fk_backend", "unknown")
+            print(f"FK backend (from training metadata): {backend}")
+
     def forward(self, keypoints):
         # keypoints: [N, 3] — raw HTS landmarks in metric space.
         keypoints = _select_and_normalize_tips(

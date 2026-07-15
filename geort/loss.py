@@ -4,7 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch 
+import torch
+import torch.nn.functional as F
 
 def chamfer_distance(input_points, target_points):
     """
@@ -82,7 +83,7 @@ def distance_preservation(points, mapped_points):
         orig_dists = torch.cdist(points[:, i, :], points[:, i, :])       # [B, B]
         mapped_dists = torch.cdist(mapped_points[:, i, :], mapped_points[:, i, :])  # [B, B]
         squared_diff = (mapped_dists - orig_dists).square()
-        losses.append(squared_diff[:, mask].mean())
+        losses.append(squared_diff[mask].mean())
     return torch.stack(losses).mean()
 
 
@@ -99,12 +100,15 @@ def local_motion_loss(d_human, d_robot):
         d_robot: Raw perturbation vectors in robot space [B, K, 3].
 
     Returns:
-        Scalar loss (negative mean cosine similarity over valid samples).
+        (loss, invalid_fraction) tuple.
     """
     d_human_hat = F.normalize(d_human, dim=-1, p=2, eps=1e-8)
     norm_r = d_robot.norm(dim=-1, keepdim=True)  # [B, K, 1]
     valid = (norm_r.squeeze(-1) > 1e-6)  # [B, K]
+    total = valid.numel()
+    invalid_count = total - valid.sum().item() if total > 0 else 0
+    invalid_frac = invalid_count / total if total > 0 else 0.0
     if not valid.any():
-        return torch.zeros((), device=d_robot.device, dtype=d_robot.dtype)
+        return torch.zeros((), device=d_robot.device, dtype=d_robot.dtype), 1.0
     cos = (d_human_hat * d_robot / norm_r.clamp(min=1e-8)).sum(-1)  # [B, K]
-    return -cos[valid].mean()
+    return -cos[valid].mean(), invalid_frac

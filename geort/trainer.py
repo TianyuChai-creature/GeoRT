@@ -28,6 +28,7 @@ from geort.keypoint_normalization import (
 from geort.formatter import HandFormatter
 from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointDataset
 from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
+from geort.analytic_fk import AnalyticFK
 from datetime import datetime
 from tqdm import tqdm 
 import os
@@ -347,7 +348,25 @@ class GeoRTTrainer:
         '''
 
         keypoint_info = self.get_keypoint_info()
-        fk_model = self.get_robot_neural_fk_model()
+        fk_backend = kwargs.get("fk_backend", "analytic")
+        if fk_backend not in ("analytic", "neural"):
+            raise ValueError(f"Unknown fk_backend: {fk_backend!r}")
+
+        # Acquire FK model based on backend.
+        if fk_backend == "analytic":
+            joint_lower, joint_upper = self.hand.get_joint_limit()
+            tip_offsets = keypoint_info.get("offset")
+            fk_model = AnalyticFK(
+                self.config["urdf_path"],
+                np.array(joint_lower),
+                np.array(joint_upper),
+                tip_offsets=tip_offsets,
+            )
+            print(f"Using analytic FK backend (pytorch_kinematics from URDF)")
+        else:
+            fk_model = self.get_robot_neural_fk_model()
+            print(f"Using neural FK backend")
+
         ik_model = IKModel(
             finger_groups=keypoint_info["finger_groups"],
             n_total_joint=len(self.config["joint_order"]),
@@ -364,6 +383,7 @@ class GeoRTTrainer:
         w_chamfer = kwargs.get("w_chamfer", 80.0)
         w_distance = kwargs.get("w_distance", 1.0)
         w_curvature = kwargs.get("w_curvature", 0.1)
+        w_motion = kwargs.get("w_motion", 1.0)
         motion_delta = float(kwargs.get("motion_delta", 0.01))
         w_collision = kwargs.get("w_collision", 0.0)
         w_pinch = kwargs.get("w_pinch", 1.0)
@@ -443,12 +463,15 @@ class GeoRTTrainer:
                 "w_chamfer": w_chamfer,
                 "w_distance": w_distance,
                 "w_curvature": w_curvature,
+                "w_motion": w_motion,
                 "w_collision": w_collision,
                 "w_pinch": w_pinch,
                 "w_mcp1_fist_prior": w_mcp1_fist_prior,
             },
             cli_args={
                 "tag": exp_tag,
+                "fk_backend": fk_backend,
+                "motion_delta": motion_delta,
                 "chamfer_target": chamfer_target,
                 "chamfer_target_path": str(chamfer_target_path) if chamfer_target_path else None,
                 "mold_path": str(mold_path) if mold_path else None,
@@ -573,7 +596,7 @@ class GeoRTTrainer:
 
                 d_human = point_delta - point
                 d_robot = embedded_point_delta - embedded_point
-                motion_loss = local_motion_loss(d_human, d_robot)
+                motion_loss, motion_invalid_frac = local_motion_loss(d_human, d_robot)
 
                 # [MCP1 fist prior]
                 if mcp1_fist_prior_mask is not None:
@@ -598,7 +621,7 @@ class GeoRTTrainer:
                 # collision Loss integration pending.
                 collision_loss = torch.tensor([0.0]).cuda()
 
-                loss = motion_loss + \
+                loss = motion_loss * w_motion + \
                        chamfer_loss * w_chamfer + \
                        distance_loss * w_distance + \
                        curvature_loss * w_curvature + \
@@ -614,6 +637,7 @@ class GeoRTTrainer:
                     print(
                         f"Epoch {epoch} | Losses"
                         f" - Motion: {format_loss(motion_loss.item())}"
+                        f" (inv: {motion_invalid_frac*100:.1f}%)"
                         f" - P-Chamfer: {format_loss(chamfer_loss.item())}"
                         f" - Distance: {format_loss(distance_loss.item())}"
                         f" - Curvature: {format_loss(curvature_loss.item())}"
@@ -642,9 +666,12 @@ if __name__ == '__main__':
     parser.add_argument('-human_data', type=str, default='human')
     parser.add_argument('-ckpt_tag', type=str, default='')
 
+    parser.add_argument('--fk_backend', choices=('analytic', 'neural'), default='analytic',
+                        help='FK backend: analytic (pytorch_kinematics) or neural (MLP).')
     parser.add_argument('--w_chamfer', type=float, default=80.0)
     parser.add_argument('--w_distance', type=float, default=1.0)
     parser.add_argument('--w_curvature', type=float, default=0.1)
+    parser.add_argument('--w_motion', type=float, default=1.0)
     parser.add_argument('--motion_delta', type=float, default=0.01, help='Perturbation magnitude in normalized space (default 1%% of [-1,1] range).')
     parser.add_argument('--w_collision', type=float, default=0.0)
     parser.add_argument('--w_pinch', type=float, default=1.0)
@@ -666,6 +693,10 @@ if __name__ == '__main__':
     # Guard: motion_delta below ~0.002 (0.1 mm in metric space) enters the
     # float32 normalisation round-trip noise floor and corrupts the direction
     # signal (see test_analytic_fk.py noise-floor calibration).
+    # The AnalyticFK internally un-normalises joint angles via
+    #   physical = lower + (normalised + 1) * half_range,
+    # which introduces ~1 μm tip-position noise in float32.
+    # motion_delta >= 0.002 keeps the perturbation at least 100× above noise.
     if args.motion_delta < 0.002:
         print(
             f"WARNING: --motion_delta={args.motion_delta} is below the 0.002 "
@@ -681,10 +712,12 @@ if __name__ == '__main__':
     
     trainer.train(
         human_data_path, 
-        tag=args.ckpt_tag, 
+        tag=args.ckpt_tag,
+        fk_backend=args.fk_backend,
         w_chamfer=args.w_chamfer,
         w_distance=args.w_distance,
         w_curvature=args.w_curvature,
+        w_motion=args.w_motion,
         motion_delta=args.motion_delta,
         w_collision=args.w_collision,
         w_pinch=args.w_pinch,
