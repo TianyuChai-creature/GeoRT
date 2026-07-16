@@ -192,50 +192,104 @@ def synergy_loss(
 
 
 def null_space_loss(
-    joint_norm: torch.Tensor,
-    fk_model,
-    finger_joint_indices: list[list[int]],
+    joint_phys: torch.Tensor,
+    q_mid: torch.Tensor,
+    finger_chains: list,
+    finger_chain_joint_idx: list[list[int]],
+    joint_lower: torch.Tensor,
+    joint_upper: torch.Tensor,
 ) -> torch.Tensor:
-    """Per-finger kinematic null-space regularisation (normalised joint space).
+    """Per-finger kinematic null-space regularisation (physical joint space).
 
-    Computes the 3×4 Jacobian J of fingertip position w.r.t. each finger's
-    4 normalised joint angles.  SVD gives the null-space direction n.
-    Penalises  (n · q_norm)²  — deviation from q_norm=0 (mid-range) along n.
+    Uses pytorch_kinematics SerialChain Jacobian (analytical, not autograd)
+    to compute the 3×4 tip-position Jacobian J for each finger.  SVD gives
+    the null-space direction n_phys.  Penalises  (n_phys · (q_phys − q_mid))².
 
-    n is detached (treated as a per-sample constant) to avoid back-prop
-    through SVD.
+    CRITICAL: ALL quantities (n_phys, q_finger, q_mid_finger) are in the SAME
+    physical radian space — n_phys comes from pytorch_kinematics native output
+    (NO normalisation applied to joint inputs before chain.jacobian), and
+    q_finger / q_mid_finger both derived from joint_phys / q_mid which are
+    unnormalised physical radians.
+
+    The entire Jacobian + SVD pipeline runs inside torch.no_grad() — n is a
+    kinematic constant and does not need gradient.  Only the q_phys deviation
+    term receives gradient.
 
     Args:
-        joint_norm: Normalised joint angles [B, 20] in [-1, 1].
-        fk_model: Callable mapping [B, 20] → [B, 5, 3] (expects normalised input).
-        finger_joint_indices: List of 5 lists, each with 4 joint indices.
+        joint_phys: Physical joint angles [B, 20] in radians.
+        q_mid: Mid-range joint angles [20] in radians.
+        finger_chains: List of 5 pytorch_kinematics SerialChain objects,
+            one per finger, from base_link to the DIP link.
+        finger_chain_joint_idx: List of 5 lists of indices into the 20-DOF
+            vector that map to the chain's finger-joint columns (columns
+            after fixed base joints).  Each inner list has 4 entries.
+        joint_lower: Lower joint limits [20] in physical radians.
+        joint_upper: Upper joint limits [20] in physical radians.
 
     Returns:
         Scalar null-space loss averaged over samples and fingers.
     """
-    B = joint_norm.shape[0]
+    B = joint_phys.shape[0]
+    device = joint_phys.device
+    D = joint_phys.shape[1]  # 20
+
+    # ── Sanity assertions ──────────────────────────────────────────────
+    assert D == 20, f"Expected 20-DOF joint vector, got {D}"
+    assert q_mid.shape == (D,), f"Expected q_mid [{D}], got {tuple(q_mid.shape)}"
+    assert joint_lower.shape == (D,), f"Expected joint_lower [{D}]"
+    assert joint_upper.shape == (D,), f"Expected joint_upper [{D}]"
+    # joint_phys must live within [lower, upper] (physical radian range).
+    lo_viol = (joint_phys < joint_lower.unsqueeze(0) - 1e-4).any().item()
+    hi_viol = (joint_phys > joint_upper.unsqueeze(0) + 1e-4).any().item()
+    if lo_viol or hi_viol:
+        raise ValueError(
+            f"joint_phys out of physical limits: "
+            f"min={(joint_phys.min().item()):.3f} vs lower={joint_lower.min().item():.3f}, "
+            f"max={(joint_phys.max().item()):.3f} vs upper={joint_upper.max().item():.3f}"
+        )
+    # q_mid must be within limits too.
+    mid_lo = (q_mid < joint_lower - 1e-4).any().item()
+    mid_hi = (q_mid > joint_upper + 1e-4).any().item()
+    if mid_lo or mid_hi:
+        raise ValueError(f"q_mid out of physical limits")
+    # ───────────────────────────────────────────────────────────────────
+
     losses = []
 
-    for fi, joint_idx in enumerate(finger_joint_indices):
-        # Jacobian J: [B, 3, 4] in normalised joint space.
-        J_blocks = []
-        for dim in range(3):
-            (grad,) = torch.autograd.grad(
-                fk_model(joint_norm)[:, fi, dim].sum(),
-                joint_norm,
-                retain_graph=True,
-                create_graph=False,
-            )
-            J_blocks.append(grad[:, joint_idx])  # [B, 4]
-        J = torch.stack(J_blocks, dim=1)  # [B, 3, 4]
+    for fi, chain in enumerate(finger_chains):
+        fj_idx = finger_chain_joint_idx[fi]  # 4 indices into 20-DOF
 
-        # SVD per sample → null-space direction n (detached, batched).
-        _U, _S, Vh = torch.linalg.svd(J.detach(), full_matrices=False)  # Vh: [B, 3, 4]
-        n = Vh[:, -1, :]  # [B, 4] — last right singular vector
+        # Build the [B, nj] joint tensor for this chain.
+        # Fixed base joints (WRIST, PALM) → 0; finger joints from joint_phys.
+        nj = len(chain.get_joint_parameter_names())
+        n_fixed = nj - 4  # wrist + palm
+        th = torch.zeros(B, nj, device=device)
+        th[:, n_fixed:] = joint_phys[:, fj_idx]  # finger joints (physical rad)
 
-        # Deviation from mid-range (q_norm=0) along null-space direction.
-        q_finger = joint_norm[:, joint_idx]  # [B, 4]
-        dev = (q_finger * n).sum(dim=1)  # [B]
-        losses.append(dev.square())
+        # Analytical Jacobian (no graph — n is detached below).
+        with torch.no_grad():
+            J_full = chain.jacobian(th)  # [B, 6, nj] — physical space
+            J_lin = J_full[:, :3, n_fixed:]  # [B, 3, 4] — finger joints only
+
+            # SVD → null-space direction n_phys (detached).
+            _U, _S, Vh = torch.linalg.svd(J_lin, full_matrices=False)
+            n_phys = Vh[:, -1, :]  # [B, 4] — PHYSICAL radian space
+
+            # Assert n_phys is unit vector.
+            n_norm = n_phys.norm(dim=-1)  # [B]
+            ok = (n_norm > 0.999) & (n_norm < 1.001)
+            if not ok.all():
+                raise RuntimeError(
+                    f"nullspace unit-vector check failed: "
+                    f"norm min={n_norm.min().item():.4f} max={n_norm.max().item():.4f}"
+                )
+
+        # Deviation from mid-range along null-space direction (gradient flows here).
+        # BOTH q_finger and q_mid_finger are in physical radian space, SAME as n_phys.
+        q_finger = joint_phys[:, fj_idx]  # [B, 4] — physical rad
+        q_mid_finger = q_mid[fj_idx].unsqueeze(0)  # [1, 4] — physical rad
+        delta = q_finger - q_mid_finger  # [B, 4] — physical rad
+        dev = (delta * n_phys).sum(dim=1)  # [B] — physical rad · unitless = physical rad
+        losses.append(dev.square())  # (physical rad)²
 
     return torch.stack(losses, dim=1).mean()

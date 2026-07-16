@@ -374,11 +374,32 @@ class GeoRTTrainer:
         ).cuda()
         os.makedirs("./checkpoint", exist_ok=True)
 
-        # Build per-finger joint index blocks for nullspace regularisation.
-        finger_joint_indices = [
-            [joint_order.index(f"F{fi+1}-R-{s}") for s in ("MCP2", "MCP1", "PIP", "DIP")]
-            for fi in range(5)
-        ]
+        import pytorch_kinematics as pk
+
+        # Build per-finger SerialChains for nullspace Jacobian.
+        finger_chains = []
+        finger_offsets = []
+        finger_chain_joint_idx = []
+        joint_order = self.config["joint_order"]
+        tip_link_names = ["F1-R-DIP", "F2-R-DIP", "F3-R-DIP", "F4-R-DIP", "F5-R-DIP"]
+        for fi in range(5):
+            chain = pk.build_serial_chain_from_urdf(
+                open(self.config["urdf_path"]).read(),
+                tip_link_names[fi],
+                self.config["base_link"],
+            ).to(device='cuda')
+            finger_chains.append(chain)
+            # Tip offset as [1, 3] tensor.
+            off = keypoint_info.get("offset", [[0, 0, 0]] * 5)[fi]
+            finger_offsets.append(torch.tensor(off, dtype=torch.float32, device='cuda').view(1, 3))
+            # Map from chain joint order to the 4 finger joints.
+            chain_names = chain.get_joint_parameter_names()
+            # Last 4 names in the chain are the finger joints.
+            fj_names = chain_names[-4:]
+            fj_idx = [joint_order.index(n) for n in fj_names]
+            finger_chain_joint_idx.append(fj_idx)
+        joint_lower_limit_t = torch.tensor(joint_lower, dtype=torch.float32, device='cuda')
+        joint_upper_limit_t = torch.tensor(joint_upper, dtype=torch.float32, device='cuda')
         q_mid_t = (joint_lower_limit_t + joint_upper_limit_t) / 2.0
 
         ik_optim = optim.AdamW(ik_model.parameters(), lr=1e-4)
@@ -627,9 +648,11 @@ class GeoRTTrainer:
                 d_robot = embedded_point_delta - embedded_point
                 motion_loss, motion_invalid_frac = local_motion_loss(d_human, d_robot)
 
+                # Convert normalized joints to physical radians (needed by synergy + nullspace).
+                joint_phys = joint_lower_limit_t + (joint + 1.0) * joint_half_range_t
+
                 # [Synergy regularisation] — F2-F5 bending joints only.
                 if synergy_weight > 0.0:
-                    joint_phys = joint_lower_limit_t + (joint + 1.0) * joint_half_range_t
                     synergy_loss_val, synergy_residuals = synergy_loss(
                         joint_phys,
                         lam=synergy_lambda,
@@ -642,7 +665,9 @@ class GeoRTTrainer:
                 # [Null-space regularisation] — per-finger kinematic nullspace.
                 if nullspace_weight > 0.0:
                     null_loss = null_space_loss(
-                        joint, fk_model, finger_joint_indices
+                        joint_phys, q_mid_t, finger_chains,
+                        finger_chain_joint_idx,
+                        joint_lower_limit_t, joint_upper_limit_t,
                     )
                 else:
                     null_loss = torch.zeros((), device=joint.device)
