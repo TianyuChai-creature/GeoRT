@@ -84,9 +84,44 @@ def test_realtime_inference_scales_and_clamps_qpos_targets(monkeypatch):
     )
 
 
-def test_realtime_qpos_scale_defaults_to_1_2(monkeypatch):
+def test_realtime_qpos_scale_defaults_to_1_05(monkeypatch):
     realtime = load_realtime_module(monkeypatch)
 
     args = realtime.build_arg_parser().parse_args([])
 
-    assert args.qpos_scale == 1.2
+    assert args.qpos_scale == 1.05
+
+
+def test_realtime_contact_refinement_cli_defaults_are_opt_in(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    args = realtime.build_arg_parser().parse_args([])
+
+    assert args.contact_refine == "off"
+    assert args.contact_p_lo == 0.5
+    assert args.contact_p_hi == 0.8
+    assert args.contact_target_dist == 0.0
+    assert args.contact_lambda == 0.1
+    assert args.contact_refine_steps == 40
+
+
+def test_realtime_contact_refinement_cli_forwards_explicit_values(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    args = realtime.build_arg_parser().parse_args([
+        "--contact_refine", "on",
+        "--contact-model-path", "checkpoint/contact_right_d1_full/contact_models.pth",
+        "--contact-p-lo", "0.45",
+        "--contact-p-hi", "0.75",
+        "--contact-target-dist", "0.003",
+        "--contact-lambda", "0.2",
+        "--contact-refine-steps", "24",
+    ])
+
+    assert args.contact_refine == "on"
+    assert str(args.contact_model_path).endswith("contact_models.pth")
+    assert args.contact_p_lo == 0.45
+    assert args.contact_p_hi == 0.75
+    assert args.contact_target_dist == 0.003
+    assert args.contact_lambda == 0.2
+    assert args.contact_refine_steps == 24

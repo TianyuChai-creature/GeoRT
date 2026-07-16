@@ -351,6 +351,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=1.05,
         help="Scale realtime qpos targets before clamping to URDF joint limits.",
     )
+    parser.add_argument(
+        "--contact_refine", "--contact-refine",
+        choices=("off", "on"),
+        default="off",
+        help="Enable probability-triggered analytic-FK pinch refinement.",
+    )
+    parser.add_argument(
+        "--contact-model-path",
+        default="checkpoint/contact_right_d1_full/contact_models.pth",
+        help="D1 custom-right four-MLP contact checkpoint.",
+    )
+    parser.add_argument("--contact_p_lo", "--contact-p-lo", type=float, default=0.5)
+    parser.add_argument("--contact_p_hi", "--contact-p-hi", type=float, default=0.8)
+    parser.add_argument("--contact-target-dist", type=float, default=0.0, help="Target thumb/finger distance in metres.")
+    parser.add_argument("--contact-lambda", type=float, default=0.1, help="Physical-qpos proximity regularisation.")
+    parser.add_argument("--contact-refine-steps", type=int, default=40, help="Fixed CPU projected-Adam iterations.")
     return parser
 
 
@@ -360,10 +376,28 @@ def main() -> None:
         raise ValueError("--smoothing-alpha must be in (0, 1]")
     if args.qpos_scale <= 0.0:
         raise ValueError("--qpos-scale must be positive")
+    if not 0.0 <= args.contact_p_lo < args.contact_p_hi <= 1.0:
+        raise ValueError("contact thresholds must satisfy 0 <= --contact-p-lo < --contact-p-hi <= 1")
+    if args.contact_target_dist < 0.0 or args.contact_lambda < 0.0:
+        raise ValueError("--contact-target-dist and --contact-lambda must be non-negative")
+    if args.contact_refine_steps <= 0:
+        raise ValueError("--contact-refine-steps must be positive")
     hand_side = infer_hand_side(args.hand, args.hand_side)
 
     print(f"[HTSRealtime] Loading checkpoint tag={args.ckpt_tag} epoch={args.epoch}")
-    model = load_model(args.ckpt_tag, epoch=args.epoch)
+    model = load_model(
+        args.ckpt_tag, epoch=args.epoch,
+        contact_refine=args.contact_refine, contact_model_path=args.contact_model_path,
+        contact_p_lo=args.contact_p_lo, contact_p_hi=args.contact_p_hi,
+        contact_target_dist=args.contact_target_dist, contact_lambda=args.contact_lambda,
+        contact_refine_steps=args.contact_refine_steps,
+    )
+    print(
+        "[HTSRealtime] contact_refine="
+        f"{args.contact_refine} model={args.contact_model_path} p_lo={args.contact_p_lo} "
+        f"p_hi={args.contact_p_hi} target_dist={args.contact_target_dist} "
+        f"lambda={args.contact_lambda} steps={args.contact_refine_steps}"
+    )
 
     config = get_config(args.hand)
     hand = HandKinematicModel.build_from_config(config, render=True)

@@ -47,7 +47,20 @@ class GeoRTRetargetingModel:
     '''
         Used by external programs.
     '''
-    def __init__(self, model_path, config_path, normalization_path=None):
+    def __init__(
+        self,
+        model_path,
+        config_path,
+        normalization_path=None,
+        *,
+        contact_refine="off",
+        contact_model_path=None,
+        contact_p_lo=0.5,
+        contact_p_hi=0.8,
+        contact_target_dist=0.0,
+        contact_lambda=0.1,
+        contact_refine_steps=40,
+    ):
         config = load_json(config_path)
         keypoint_info = select_keypoint_types(
             parse_config_keypoint_info(config), allowed_types=("tip",)
@@ -68,6 +81,33 @@ class GeoRTRetargetingModel:
         self.model.load_state_dict(torch.load(model_path))
         self.model.eval()
         self.qpos_normalizer = HandFormatter(joint_lower_limit, joint_upper_limit)
+        if contact_refine not in {"off", "on"}:
+            raise ValueError("contact_refine must be 'off' or 'on'")
+        self.contact_refiner = None
+        self.contact_p_lo = float(contact_p_lo)
+        self.contact_p_hi = float(contact_p_hi)
+        if not 0.0 <= self.contact_p_lo < self.contact_p_hi <= 1.0:
+            raise ValueError("contact trigger thresholds must satisfy 0 <= p_lo < p_hi <= 1")
+        if contact_refine == "on":
+            if contact_model_path is None:
+                raise ValueError("contact_refine='on' requires contact_model_path")
+            from geort.contact.runtime import ContactRefiner
+
+            self.contact_refiner = ContactRefiner.load(
+                contact_model_path,
+                hand_config=config,
+                target_distance=float(contact_target_dist),
+                regularization=float(contact_lambda),
+                steps=int(contact_refine_steps),
+            )
+            print(
+                "contact_refine=on "
+                f"model={contact_model_path} p_lo={self.contact_p_lo} p_hi={self.contact_p_hi} "
+                f"target_dist={contact_target_dist} lambda={contact_lambda} steps={contact_refine_steps}"
+            )
+        else:
+            print("contact_refine=off")
+        self.last_contact_refinement = None
 
         # Report FK backend used during training (if metadata is available).
         metadata_path = Path(model_path).parent / "training_metadata.json"
@@ -76,16 +116,28 @@ class GeoRTRetargetingModel:
             backend = meta.get("cli_args", {}).get("fk_backend", "unknown")
             print(f"FK backend (from training metadata): {backend}")
 
+    def _apply_contact_refinement(self, q_map, keypoints):
+        """Preserve the mapper output exactly unless opt-in contact refinement is active."""
+        if self.contact_refiner is None:
+            return q_map
+        result = self.contact_refiner.refine_from_keypoints(
+            q_map, keypoints, p_lo=self.contact_p_lo, p_hi=self.contact_p_hi
+        )
+        self.last_contact_refinement = result
+        return result.q_out
+
     def forward(self, keypoints):
-        # keypoints: [N, 3] — raw HTS landmarks in metric space.
-        keypoints = _select_and_normalize_tips(
-            keypoints, self.human_ids, self.finger_names, self.human_normalization
+        # keypoints: [N, 3] — raw HTS landmarks in metric hand-base space.
+        raw_keypoints = keypoints
+        normalized_tips = _select_and_normalize_tips(
+            raw_keypoints, self.human_ids, self.finger_names, self.human_normalization
         )
         joint_normalized = self.model.forward(
-            torch.from_numpy(keypoints).unsqueeze(0).float().cuda()
+            torch.from_numpy(normalized_tips).unsqueeze(0).float().cuda()
         )
         joint_raw = self.qpos_normalizer.unnormalize(joint_normalized.detach().cpu().numpy())
-        return joint_raw[0]
+        q_map = joint_raw[0]
+        return self._apply_contact_refinement(q_map, raw_keypoints)
 
 
 def resolve_checkpoint_dir(tag=''):
@@ -107,7 +159,11 @@ def resolve_checkpoint_dir(tag=''):
     raise FileNotFoundError(f"No exact checkpoint {tag!r} found in {checkpoint_root}.{hint}")
 
 
-def load_model(tag='', epoch=0):
+def load_model(
+    tag='', epoch=0, *, contact_refine="off", contact_model_path=None,
+    contact_p_lo=0.5, contact_p_hi=0.8, contact_target_dist=0.0,
+    contact_lambda=0.1, contact_refine_steps=40,
+):
     '''
         Loading API.
     '''
@@ -118,7 +174,13 @@ def load_model(tag='', epoch=0):
         model_path = checkpoint_root / "last.pth"
 
     config_path = checkpoint_root / "config.json"
-    return GeoRTRetargetingModel(model_path=model_path, config_path=config_path)
+    return GeoRTRetargetingModel(
+        model_path=model_path, config_path=config_path,
+        contact_refine=contact_refine, contact_model_path=contact_model_path,
+        contact_p_lo=contact_p_lo, contact_p_hi=contact_p_hi,
+        contact_target_dist=contact_target_dist, contact_lambda=contact_lambda,
+        contact_refine_steps=contact_refine_steps,
+    )
 
 if __name__ == '__main__':
     # load the model in one line.
