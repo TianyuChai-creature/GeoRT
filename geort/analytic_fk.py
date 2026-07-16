@@ -145,15 +145,25 @@ class AnalyticFK(nn.Module):
             torch.tensor(tip_offsets, dtype=torch.float32).view(5, 3, 1),
         )
 
-    def forward(self, joint_normalized: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        joint_normalized: torch.Tensor,
+        *,
+        return_link_rotations: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Compute tip positions from normalized joint angles.
 
         Args:
             joint_normalized: [B, 20] float tensor in [-1, 1],
                 ordered as FINGER_JOINT_BLOCKS (config joint_order).
+            return_link_rotations: Also return distal-link rotations in the
+                base frame. The default preserves the established position-only
+                forward path exactly.
 
         Returns:
-            [B, 5, 3] tip positions in metres (base_link frame), differentiable.
+            Normally [B, 5, 3] positions in metres. When
+            ``return_link_rotations`` is true, returns ``(tips, rotations)``
+            with rotations shaped [B, 5, 3, 3].
         """
         if joint_normalized.ndim != 2 or joint_normalized.shape[1] != 20:
             raise ValueError(
@@ -188,6 +198,7 @@ class AnalyticFK(nn.Module):
 
         # Extract tip positions with centre offsets applied in link-local frame.
         tips = []
+        link_rotations = []
         for i, link in enumerate(self._tip_links):
             m = ret[link].get_matrix()  # [B, 4, 4]
             # Apply offset in the link's local frame (rotation only, then add translation).
@@ -195,8 +206,13 @@ class AnalyticFK(nn.Module):
             link_rot = m[:, :3, :3]  # [B, 3, 3]
             offset_world = (link_rot @ self._tip_offsets[i]).squeeze(-1)  # [B, 3]
             tips.append(link_pos + offset_world)
+            if return_link_rotations:
+                link_rotations.append(link_rot)
 
-        return torch.stack(tips, dim=1).to(device)  # [B, 5, 3]
+        stacked_tips = torch.stack(tips, dim=1).to(device)  # [B, 5, 3]
+        if return_link_rotations:
+            return stacked_tips, torch.stack(link_rotations, dim=1).to(device)
+        return stacked_tips
 
     @property
     def n_dof(self) -> int:

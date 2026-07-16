@@ -74,6 +74,9 @@ class RobotKinematicsDataset:
         np_array = np.load(qpos_keypoint_file,  allow_pickle=True)
         self.qpos = np_array["qpos"]
         self.keypoints = np_array["keypoint"].item()
+        self.link_rotations = (
+            np_array["link_rotation"].item() if "link_rotation" in np_array.files else None
+        )
         self.keypoint_names = keypoint_names
         print("Keypoint Names", self.keypoint_names)
         self.n = len(self.qpos)
@@ -96,6 +99,25 @@ class RobotKinematicsDataset:
         for keypoint_name in keypoint_names:
             all_keypoint_data.append(self.keypoints[keypoint_name])
         return np.array(all_keypoint_data)
+
+    def export_robot_link_rotations(self, keypoint_names):
+        """Return [K,N,3,3] link rotations from a new local-frame cloud.
+
+        Legacy point clouds intentionally have no identity fallback: local
+        motion must fail loudly rather than silently change the contract.
+        """
+        if self.link_rotations is None:
+            raise ValueError(
+                "robot target cloud lacks required link_rotation field; "
+                "regenerate this target cloud for --motion_frame local"
+            )
+        missing = [name for name in keypoint_names if name not in self.link_rotations]
+        if missing:
+            raise ValueError(f"robot target cloud link_rotation missing keys: {missing}")
+        values = np.asarray([self.link_rotations[name] for name in keypoint_names], dtype=np.float32)
+        if values.ndim != 4 or values.shape[-2:] != (3, 3):
+            raise ValueError(f"robot target cloud link_rotation shape invalid: {values.shape}")
+        return values
 
 if __name__ == '__main__':
     dataset = RobotJointKeypointDataset("../data/allegro_native.npz",["link_3.0_tip", "link_3.0_tip"])

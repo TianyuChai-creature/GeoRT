@@ -19,7 +19,13 @@ def get_joint_limits(hand_config: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
 def make_analytic_tip_callback(
     hand_config: dict[str, Any], lower: np.ndarray, upper: np.ndarray, tip_offsets: object
 ):
-    """Inject current AnalyticFK behind the legacy physical-qpos callback."""
+    """Inject current AnalyticFK behind the legacy physical-qpos callback.
+
+    AnalyticFK receives normalized qpos and internally converts it back to
+    physical float32 angles. This physical→normalized→physical round-trip adds
+    micrometre-scale TIP noise, harmless for the 1 mm parity gate but not a
+    reusable path for future micrometre-sensitive applications.
+    """
     from geort.analytic_fk import AnalyticFK
 
     fk = AnalyticFK(hand_config["urdf_path"], lower, upper, tip_offsets=tip_offsets)

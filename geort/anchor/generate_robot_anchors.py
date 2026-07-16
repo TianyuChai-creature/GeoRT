@@ -28,7 +28,12 @@ FINGER_NAMES = ("thumb", "index", "middle", "ring", "pinky")
 _GROUP_TYPES = ("lateral", "bending")
 
 
-def evaluate_analytic_tip_fk(qpos: object, config: dict[str, Any]) -> np.ndarray:
+def evaluate_analytic_tip_fk(
+    qpos: object,
+    config: dict[str, Any],
+    *,
+    return_link_rotations: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Evaluate physical qpos with the training analytic FK and config offsets."""
     from geort.analytic_fk import AnalyticFK
     from geort.utils.config_utils import parse_config_joint_limit, parse_config_keypoint_info, select_keypoint_types
@@ -45,8 +50,24 @@ def evaluate_analytic_tip_fk(qpos: object, config: dict[str, Any]) -> np.ndarray
     normalised = 2.0 * (values - lower) / (upper - lower) - 1.0
     fk = AnalyticFK(config["urdf_path"], lower, upper, tip_offsets=info["offset"])
     with torch.no_grad():
-        result = fk(torch.from_numpy(normalised))
+        result = fk(torch.from_numpy(normalised), return_link_rotations=return_link_rotations)
+    if return_link_rotations:
+        tips, rotations = result
+        return (
+            tips.cpu().numpy().astype(np.float64, copy=False),
+            rotations.cpu().numpy().astype(np.float64, copy=False),
+        )
     return result.cpu().numpy().astype(np.float64, copy=False)
+
+
+def analytic_link_rotation_callback(config: dict[str, Any]) -> Callable[[np.ndarray, int], np.ndarray]:
+    """Return physical-qpos callback for analytic distal-link rotations."""
+    def evaluate(qpos: np.ndarray, finger_index: int) -> np.ndarray:
+        _, rotations = evaluate_analytic_tip_fk(
+            np.asarray(qpos, dtype=np.float32)[None, :], config, return_link_rotations=True
+        )
+        return rotations[0, finger_index]
+    return evaluate
 
 
 def analytic_tip_callback(config: dict[str, Any]) -> Callable[[np.ndarray, int], np.ndarray]:
@@ -69,6 +90,7 @@ class PairedAnchors:
     anchor_types: np.ndarray
     trajectory_t: np.ndarray
     source_sparse_indices: np.ndarray
+    robot_link_rotations: np.ndarray | None = None
 
 
 def _validate_human_anchors(anchors: MinedHumanAnchors) -> None:
@@ -123,6 +145,8 @@ def build_paired_anchors(
     human_anchors: MinedHumanAnchors,
     robot_sparse_qpos: object,
     exact_tip_fk: Callable[[np.ndarray, int], np.ndarray],
+    *,
+    exact_link_rotation_fk: Callable[[np.ndarray, int], np.ndarray] | None = None,
 ) -> PairedAnchors:
     """Interpolate same-level groups to 250 lateral + 500 bending anchor pairs."""
     _validate_human_anchors(human_anchors)
@@ -147,6 +171,7 @@ def build_paired_anchors(
     t_parts: list[np.ndarray] = []
     source_parts: list[np.ndarray] = []
     context_parts: list[np.ndarray] = []
+    rotation_parts: list[np.ndarray] = []
     human_tip_indices = np.array([4, 8, 12, 16, 20], dtype=np.int64)
     for group_index, (finger_index, anchor_type) in enumerate(
         (finger_index, anchor_type)
@@ -169,6 +194,14 @@ def build_paired_anchors(
             raise ValueError("exact_tip_fk must return finite [3] points") from error
         if robot_points.shape != (output_count, 3) or not np.all(np.isfinite(robot_points)):
             raise ValueError("exact_tip_fk must return finite [3] points")
+        if exact_link_rotation_fk is not None:
+            rotations = np.asarray(
+                [exact_link_rotation_fk(qpos, finger_index) for qpos in robot["points"]],
+                dtype=np.float64,
+            )
+            if rotations.shape != (output_count, 3, 3) or not np.all(np.isfinite(rotations)):
+                raise ValueError("exact_link_rotation_fk must return finite [3,3] rotations")
+            rotation_parts.append(rotations)
         human_parts.append(context[:, finger_index, :])
         context_parts.append(context)
         robot_parts.append(robot_points)
@@ -188,6 +221,7 @@ def build_paired_anchors(
         anchor_types=np.concatenate(type_parts, axis=0),
         trajectory_t=np.concatenate(t_parts, axis=0),
         source_sparse_indices=np.concatenate(source_parts, axis=0),
+        robot_link_rotations=(np.concatenate(rotation_parts, axis=0) if rotation_parts else None),
     )
     if paired.human_points.shape[0] != 750:
         raise RuntimeError("paired anchor construction did not produce 750 rows")
@@ -238,6 +272,7 @@ def _atomic_npz(path: Path, paired: PairedAnchors, *, metadata: dict[str, Any]) 
                 anchor_types=paired.anchor_types,
                 trajectory_t=paired.trajectory_t,
                 source_sparse_indices=paired.source_sparse_indices,
+                **({"robot_link_rotations": paired.robot_link_rotations} if paired.robot_link_rotations is not None else {}),
                 metadata_json=np.asarray(json.dumps(metadata, sort_keys=True)),
             )
         os.replace(temporary, path)
@@ -302,9 +337,8 @@ def main(argv: list[str] | None = None) -> Path:
     if tuple(tip_lookup) != FINGER_NAMES:
         raise ValueError("robot config must provide thumb-to-pinky TIP keypoints")
 
-    def exact_tip_fk(qpos: np.ndarray, finger_index: int) -> np.ndarray:
-        keypoints = hand.keypoint_from_qpos(qpos, ret_vec=True)
-        return keypoints[tip_lookup[FINGER_NAMES[finger_index]]]
+    exact_tip_fk = analytic_tip_callback(config)
+    exact_link_rotation_fk = analytic_link_rotation_callback(config)
 
     lower, upper = hand.get_joint_limit()
     robot_knots = build_robot_sparse_knots(
@@ -314,12 +348,14 @@ def main(argv: list[str] | None = None) -> Path:
         exact_tip_fk,
         thumb_dense_count=args.thumb_dense_count,
     )
-    paired = build_paired_anchors(human, robot_knots, exact_tip_fk)
+    paired = build_paired_anchors(
+        human, robot_knots, exact_tip_fk, exact_link_rotation_fk=exact_link_rotation_fk
+    )
     _atomic_npz(
         output,
         paired,
         metadata={
-            "schema_version": 1,
+            "schema_version": 2,
             "hand": config["name"],
             "human_anchor_source": str(args.human_anchors),
             "sparse_count": 50,

@@ -42,21 +42,27 @@ def chamfer_distance(input_points, target_points):
     return chamfer_dist.mean()
 
 
-def partial_chamfer_distance(input_points, target_points):
+def partial_chamfer_distance(input_points, target_points, *, return_indices=False):
     """One-way mean nearest-neighbor L2 distance from input to target.
 
-    L_P-Chamfer = (1/|C_H|) * sum_j min_k ||f_m(x_j^H) - x_k^R||
+    L_P-Chamfer = (1/|C_H|) * sum_j min_k ||f_m(x_j^H) - x_k^R||.
+    ``return_indices`` exposes the already-computed nearest-neighbor indices
+    for the local motion frame; the default numerical path is unchanged.
 
     Args:
         input_points: Mapped human points [B, N, 3].
         target_points: Robot target points [B, M, 3].
+        return_indices: Return argmin indices [B, N] alongside the loss.
 
     Returns:
-        Scalar partial Chamfer distance.
+        Scalar partial Chamfer distance, or ``(distance, indices)``.
     """
     pairwise_distance = torch.cdist(input_points, target_points, p=2.0)  # [B, N, M]
-    min_distance, _ = pairwise_distance.min(dim=2)  # [B, N]
-    return min_distance.mean()
+    min_distance, min_indices = pairwise_distance.min(dim=2)  # [B, N]
+    distance = min_distance.mean()
+    if return_indices:
+        return distance, min_indices
+    return distance
 
 
 def distance_preservation(points, mapped_points):
@@ -88,21 +94,31 @@ def distance_preservation(points, mapped_points):
     return torch.stack(losses).mean()
 
 
-def local_motion_loss(d_human, d_robot):
-    """Local motion preservation via negative cosine similarity.
+def local_motion_loss(d_human, d_robot, human_frames=None, robot_frames=None):
+    """Motion preservation via negative cosine similarity.
 
-    L_motion = -1/|C| * sum_j ⟨T⁻¹(x_j)·Δx/‖Δx‖, T⁻¹(f_m(x_j))·Δf_m/‖Δf_m‖⟩
-
-    Masks out samples where mapped displacement ‖Δf_m‖ < 1e-6 (joint
-    saturation, mapping flat-regions) to avoid NaN from near-zero division.
+    With no frame arguments this is the established global-coordinate loss.
+    With both column-basis frames [B, K, 3, 3], each displacement is expressed
+    in its local coordinates by ``R.T @ d`` before normalisation.
 
     Args:
         d_human: Raw perturbation vectors in human space [B, K, 3].
         d_robot: Raw perturbation vectors in robot space [B, K, 3].
+        human_frames: Optional human column bases [B, K, 3, 3].
+        robot_frames: Optional robot column bases [B, K, 3, 3].
 
     Returns:
         (loss, invalid_fraction) tuple.
     """
+    if (human_frames is None) != (robot_frames is None):
+        raise ValueError('human_frames and robot_frames must be supplied together')
+    if human_frames is not None:
+        if human_frames.shape != (*d_human.shape[:2], 3, 3):
+            raise ValueError(f'human_frames shape {human_frames.shape} does not match {d_human.shape}')
+        if robot_frames.shape != (*d_robot.shape[:2], 3, 3):
+            raise ValueError(f'robot_frames shape {robot_frames.shape} does not match {d_robot.shape}')
+        d_human = (human_frames.transpose(-1, -2) @ d_human.unsqueeze(-1)).squeeze(-1)
+        d_robot = (robot_frames.transpose(-1, -2) @ d_robot.unsqueeze(-1)).squeeze(-1)
     d_human_hat = F.normalize(d_human, dim=-1, p=2, eps=1e-8)
     norm_r = d_robot.norm(dim=-1, keepdim=True)  # [B, K, 1]
     valid = (norm_r.squeeze(-1) > 1e-6)  # [B, K]

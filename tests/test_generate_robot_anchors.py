@@ -63,6 +63,19 @@ def test_paired_builder_interpolates_by_group_to_exactly_750_rows() -> None:
     assert np.all(paired.finger_indices[:150] == 0)
 
 
+def test_paired_builder_exports_optional_link_rotations() -> None:
+    human = _human_anchors()
+    paired = build_paired_anchors(
+        human,
+        np.zeros((50, 20), dtype=np.float64),
+        lambda qpos, finger_index: np.zeros(3),
+        exact_link_rotation_fk=lambda qpos, finger_index: np.eye(3),
+    )
+    assert paired.robot_link_rotations is not None
+    assert paired.robot_link_rotations.shape == (750, 3, 3)
+    np.testing.assert_array_equal(paired.robot_link_rotations[0], np.eye(3))
+
+
 def test_paired_builder_keeps_human_robot_match_by_finger_type_level_only() -> None:
     human = _human_anchors()
     robot_knots = np.zeros((50, 4), dtype=np.float64)

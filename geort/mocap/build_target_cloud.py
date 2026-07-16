@@ -377,10 +377,31 @@ def density_cap_qpos(
     return qpos[indices], indices
 
 
-def save_robot_kinematics_npz(path: Path | str, *, qpos: np.ndarray, keypoints: dict[str, np.ndarray]) -> Path:
+def save_robot_kinematics_npz(
+    path: Path | str,
+    *,
+    qpos: np.ndarray,
+    keypoints: dict[str, np.ndarray],
+    link_rotations: dict[str, np.ndarray] | None = None,
+) -> Path:
+    """Write a robot target cloud, optionally including distal-link rotations.
+
+    The optional field is deliberately absent for legacy outputs.  Local motion
+    callers require it explicitly and reject legacy files rather than guessing
+    an identity frame.
+    """
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(output, qpos=np.asarray(qpos, dtype=np.float32), keypoint=keypoints)
+    fields: dict[str, object] = {
+        "qpos": np.asarray(qpos, dtype=np.float32),
+        "keypoint": keypoints,
+    }
+    if link_rotations is not None:
+        fields["link_rotation"] = {
+            name: np.asarray(values, dtype=np.float32)
+            for name, values in link_rotations.items()
+        }
+    np.savez(output, **fields)
     return output
 
 
@@ -390,6 +411,41 @@ def save_mold_json(path: Path | str, mold: Mold) -> Path:
     output.write_text(json.dumps(mold.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
     return output
 
+
+
+def analytic_tip_link_rotations_from_qpos(
+    config: dict,
+    qpos: np.ndarray,
+    keypoint_names: list[str],
+) -> dict[str, np.ndarray]:
+    """Export analytic distal-link rotations for a newly generated TIP cloud."""
+    import torch
+
+    from geort.analytic_fk import AnalyticFK
+    from geort.utils.config_utils import (
+        parse_config_joint_limit,
+        parse_config_keypoint_info,
+        select_keypoint_types,
+    )
+
+    info = select_keypoint_types(
+        parse_config_keypoint_info(config), allowed_types=("tip",)
+    )
+    if list(keypoint_names) != list(info["link"]):
+        raise ValueError(
+            "link rotation export requires the configured five TIP links in "
+            f"order; got {keypoint_names}, expected {info['link']}"
+        )
+    lower, upper = parse_config_joint_limit(config)
+    lower = np.asarray(lower, dtype=np.float32)
+    upper = np.asarray(upper, dtype=np.float32)
+    qpos = np.asarray(qpos, dtype=np.float32)
+    normalised = 2.0 * (qpos - lower) / (upper - lower) - 1.0
+    fk = AnalyticFK(config["urdf_path"], lower, upper, tip_offsets=info["offset"])
+    with torch.no_grad():
+        _, rotations = fk(torch.from_numpy(normalised), return_link_rotations=True)
+    values = rotations.cpu().numpy().astype(np.float32, copy=False)
+    return {name: values[:, index] for index, name in enumerate(keypoint_names)}
 
 
 def keypoints_from_qpos_sequence(
@@ -482,6 +538,11 @@ def build_target_cloud(
         cap=cap,
     )
     keypoints = keypoints_from_qpos_sequence(hand, qpos, keypoint_names)
+    # Generic/test generators without the five-TIP config keep their legacy
+    # schema.  A real configured target cloud always receives rotations.
+    link_rotations = None
+    if "fingertip_link" in config:
+        link_rotations = analytic_tip_link_rotations_from_qpos(config, qpos, keypoint_names)
 
     debug = Path(debug_dir)
     debug.mkdir(parents=True, exist_ok=True)
@@ -489,7 +550,9 @@ def build_target_cloud(
     np.save(debug / "angles_motion.npy", motion_angles)
     np.save(debug / "kept_indices.npy", kept_indices)
     save_mold_json(debug / "mold.json", mold)
-    return save_robot_kinematics_npz(output_path, qpos=qpos, keypoints=keypoints)
+    return save_robot_kinematics_npz(
+        output_path, qpos=qpos, keypoints=keypoints, link_rotations=link_rotations
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

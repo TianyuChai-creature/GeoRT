@@ -32,6 +32,7 @@ from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointD
 from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
 from geort.analytic_fk import AnalyticFK
 from geort.anchor.anchor_runtime_loader import load_anchor_points_for_current_run
+from geort.motion_frames import build_human_motion_frames, robot_task_frames
 # Runtime adapter performs load_raw_anchor_training_points normalization after the
 # "归一化契约尚未写入" and "human_data_source mismatch" contract checks.
 from datetime import datetime
@@ -159,6 +160,7 @@ def prepare_human_training_dataset(
     mcp1_fist_prior_mcp_weight=2.0,
     mcp1_fist_prior_pip_weight=1.0,
     mcp1_fist_prior_dip_weight=0.7,
+    motion_frame="global",
 ):
     manifest = maybe_load_dataset_manifest(human_data_path)
     data_path = manifest.data_path if manifest is not None else Path(human_data_path)
@@ -184,6 +186,12 @@ def prepare_human_training_dataset(
 
     # Keep metric points for pinch loss which uses physical thresholds.
     frame_fields = {"metric_point": selected_points}
+    motion_frame_report = None
+    if motion_frame == "local":
+        motion_rotations, motion_frame_report = build_human_motion_frames(
+            np.asarray(human_points[:, :21, :3], dtype=np.float64)
+        )
+        frame_fields["motion_rotation"] = motion_rotations.astype(np.float32)
     if mcp1_fist_prior_enabled:
         mask = compute_mcp1_fist_prior_mask(
             human_points,
@@ -194,7 +202,12 @@ def prepare_human_training_dataset(
         )
         frame_fields["mcp1_fist_prior_mask"] = mask
 
-    return FramePointDataset(normalized_points, frame_fields=frame_fields), weights, human_stats
+    return (
+        FramePointDataset(normalized_points, frame_fields=frame_fields),
+        weights,
+        human_stats,
+        motion_frame_report,
+    )
 
 
 def get_float_list_from_np(np_vector):
@@ -223,6 +236,14 @@ class GeoRTTrainer:
         )
         return kinematics_dataset.export_robot_pointcloud(keypoint_names)
         
+    def get_robot_link_rotationcloud(self, keypoint_names, chamfer_target="uniform", chamfer_target_path=None):
+        """Read analytic distal-link rotations from the exact Chamfer target."""
+        kinematics_dataset = self.get_robot_kinematics_dataset(
+            chamfer_target=chamfer_target,
+            chamfer_target_path=chamfer_target_path,
+        )
+        return kinematics_dataset.export_robot_link_rotations(keypoint_names)
+
     def get_robot_kinematics_dataset(self, chamfer_target="uniform", chamfer_target_path=None):
         '''
             Utility getter function. Return the robot kinematics dataset.
@@ -285,7 +306,25 @@ class GeoRTTrainer:
             
         all_data_keypoint = merge_dict_list(all_data_keypoint)    
         
-        dataset = {"qpos": all_data_qpos, "keypoint": all_data_keypoint}
+        qpos_array = np.asarray(all_data_qpos, dtype=np.float32)
+        analytic_fk = AnalyticFK(
+            self.config["urdf_path"], joint_range_low, joint_range_high,
+            tip_offsets=info["offset"],
+        )
+        normalised_qpos = 2.0 * (qpos_array - joint_range_low) / (joint_range_high - joint_range_low) - 1.0
+        with torch.no_grad():
+            _, link_rotation_values = analytic_fk(
+                torch.from_numpy(normalised_qpos), return_link_rotations=True
+            )
+        link_rotations = {
+            name: link_rotation_values[:, index].cpu().numpy().astype(np.float32)
+            for index, name in enumerate(info["link"])
+        }
+        dataset = {
+            "qpos": qpos_array,
+            "keypoint": all_data_keypoint,
+            "link_rotation": link_rotations,
+        }
 
         if save:
             # save data to disk for future use.
@@ -364,6 +403,9 @@ class GeoRTTrainer:
         fk_backend = kwargs.get("fk_backend", "analytic")
         if fk_backend not in ("analytic", "neural"):
             raise ValueError(f"Unknown fk_backend: {fk_backend!r}")
+        motion_frame = kwargs.get("motion_frame", "global")
+        if motion_frame not in ("global", "local"):
+            raise ValueError(f"Unknown motion_frame: {motion_frame!r}")
 
         # Acquire FK model based on backend.
         if fk_backend == "analytic":
@@ -523,6 +565,16 @@ class GeoRTTrainer:
         robot_points = normalize_finger_points(
             robot_points_metric.transpose(1, 0, 2), finger_names, robot_stats
         ).transpose(1, 0, 2)
+        robot_task_rotation_cloud = None
+        if motion_frame == "local":
+            robot_link_rotation_cloud = self.get_robot_link_rotationcloud(
+                robot_keypoint_names,
+                chamfer_target=chamfer_target,
+                chamfer_target_path=effective_chamfer_target_path,
+            )
+            robot_task_rotation_cloud = robot_task_frames(
+                torch.from_numpy(robot_link_rotation_cloud).permute(1, 0, 2, 3)
+            ).permute(1, 0, 2, 3).cpu().numpy().astype(np.float32, copy=False)
         metadata_target_path = (
             resolved_chamfer_target.path
             if effective_chamfer_target_path is not None
@@ -548,6 +600,7 @@ class GeoRTTrainer:
                 "tag": exp_tag,
                 "fk_backend": fk_backend,
                 "motion_delta": motion_delta,
+                "motion_frame": motion_frame,
                 "batch_size": batch_size,
                 "lr": lr,
                 "chamfer_target": chamfer_target,
@@ -582,7 +635,7 @@ class GeoRTTrainer:
         for robot_keypoint_name, human_id in zip(robot_keypoint_names, human_finger_idxes):
             print(f"Robot Keypoint {robot_keypoint_name}: Human Id: {human_id}")
 
-        point_dataset_human, human_frame_weights, human_stats = prepare_human_training_dataset(
+        point_dataset_human, human_frame_weights, human_stats, human_motion_frame_report = prepare_human_training_dataset(
             human_data_path,
             human_finger_idxes,
             finger_names,
@@ -591,7 +644,13 @@ class GeoRTTrainer:
             mcp1_fist_prior_mcp_weight=mcp1_fist_prior_mcp_weight,
             mcp1_fist_prior_pip_weight=mcp1_fist_prior_pip_weight,
             mcp1_fist_prior_dip_weight=mcp1_fist_prior_dip_weight,
+            motion_frame=motion_frame,
         )
+        if motion_frame == "local":
+            np.save(Path(save_dir) / "human_motion_frames.npy", point_dataset_human.frame_fields["motion_rotation"])
+            if update_latest:
+                np.save(Path(last_save_dir) / "human_motion_frames.npy", point_dataset_human.frame_fields["motion_rotation"])
+            print("human motion-frame fallbacks: " + ", ".join(str(int(v)) for v in human_motion_frame_report.fallback_counts), flush=True)
         normalization_metadata = {
             "schema_version": 1,
             "keypoint_type": "tip",
@@ -641,6 +700,7 @@ class GeoRTTrainer:
             "human_data": str(human_data_path),
             "lr": lr,
             "motion_delta": motion_delta,
+            "motion_frame": motion_frame,
             "nullspace_subsample": nullspace_subsample,
             "nullspace_weight": nullspace_weight,
             "run_git_commit": kwargs.get("run_git_commit"),
@@ -690,9 +750,11 @@ class GeoRTTrainer:
                     metric_point = batch["metric_point"].to(device)  # metric [B, K, 3]
                     if "mcp1_fist_prior_mask" in batch:
                         mcp1_fist_prior_mask = batch["mcp1_fist_prior_mask"].to(device)
+                    motion_rotation = batch["motion_rotation"].to(device) if motion_frame == "local" else None
                 else:
                     point = batch.to(device)
                     metric_point = point
+                    motion_rotation = None
                 joint, embedded_metric, embedded_point = forward_human_to_robot(point)
 
                 # Anchor rows are isolated from every main-batch loss and regularizer.
@@ -740,8 +802,17 @@ class GeoRTTrainer:
                 target = torch.from_numpy(robot_points[:, selected_idx, :]).permute(1, 0, 2).float().to(device)
                 
                 chamfer_by_keypoint = []
+                nearest_robot_indices = []
                 for i in range(n_keypoints):
-                    chamfer_by_keypoint.append(partial_chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
+                    if motion_frame == "local":
+                        chamfer_value, nearest_index = partial_chamfer_distance(
+                            embedded_point[:, i, :].unsqueeze(0),
+                            target[:, i, :].unsqueeze(0), return_indices=True,
+                        )
+                        chamfer_by_keypoint.append(chamfer_value)
+                        nearest_robot_indices.append(nearest_index.squeeze(0))
+                    else:
+                        chamfer_by_keypoint.append(partial_chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
                 chamfer_loss = torch.stack(chamfer_by_keypoint).mean()
 
                 # [Distance Preservation]
@@ -762,7 +833,19 @@ class GeoRTTrainer:
 
                 d_human = point_delta - point
                 d_robot = embedded_point_delta - embedded_point
-                motion_loss, motion_invalid_frac = local_motion_loss(d_human, d_robot)
+                if motion_frame == "local":
+                    selected_rotation_cloud = torch.from_numpy(
+                        robot_task_rotation_cloud[:, selected_idx, :, :]
+                    ).to(device=device, dtype=point.dtype)
+                    robot_motion_rotation = torch.stack(
+                        [selected_rotation_cloud[i, nearest_robot_indices[i]] for i in range(n_keypoints)],
+                        dim=1,
+                    )
+                    motion_loss, motion_invalid_frac = local_motion_loss(
+                        d_human, d_robot, motion_rotation, robot_motion_rotation
+                    )
+                else:
+                    motion_loss, motion_invalid_frac = local_motion_loss(d_human, d_robot)
 
                 # Convert normalized joints to physical radians (needed by synergy + nullspace).
                 joint_phys = joint_lower_limit_t + (joint + 1.0) * joint_half_range_t
@@ -922,6 +1005,7 @@ if __name__ == '__main__':
     parser.add_argument('--w_curvature', type=float, default=0.1)
     parser.add_argument('--w_motion', type=float, default=1.0)
     parser.add_argument('--motion_delta', type=float, default=0.01, help='Perturbation magnitude in normalized space (default 1%% of [-1,1] range).')
+    parser.add_argument('--motion_frame', choices=('global', 'local'), default='global', help='Coordinate frame for L_motion.')
     parser.add_argument('--w_collision', type=float, default=0.0)
     parser.add_argument('--w_pinch', type=float, default=1.0)
     parser.add_argument('--pinch_threshold', type=float, default=0.015)
@@ -985,6 +1069,7 @@ if __name__ == '__main__':
         w_curvature=args.w_curvature,
         w_motion=args.w_motion,
         motion_delta=args.motion_delta,
+        motion_frame=args.motion_frame,
         w_collision=args.w_collision,
         w_pinch=args.w_pinch,
         pinch_threshold=args.pinch_threshold,

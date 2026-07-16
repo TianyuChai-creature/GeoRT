@@ -223,6 +223,18 @@ def test_save_robot_kinematics_npz_writes_dataset_compatible_fields(tmp_path: Pa
     assert data["keypoint"].item()["tip"].shape == (2, 3)
 
 
+def test_save_robot_kinematics_npz_optionally_writes_link_rotations(tmp_path: Path) -> None:
+    path = tmp_path / "target_rotations.npz"
+    rotations = {"tip": np.broadcast_to(np.eye(3), (2, 3, 3)).copy()}
+    save_robot_kinematics_npz(
+        path, qpos=np.zeros((2, 2), dtype=np.float32),
+        keypoints={"tip": np.zeros((2, 3), dtype=np.float32)},
+        link_rotations=rotations,
+    )
+    data = np.load(path, allow_pickle=True)
+    np.testing.assert_array_equal(data["link_rotation"].item()["tip"], rotations["tip"])
+
+
 def test_build_target_cloud_file_uses_mold_density_cap_and_hand_fk(tmp_path: Path) -> None:
     rest = make_frames(6)
     motion = make_frames(12)
