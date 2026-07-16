@@ -53,22 +53,30 @@ def test_global_rigid_rotation_left_multiplies_human_frames():
     np.testing.assert_allclose(rotated_rotations, q @ rotations, atol=1e-6)
 
 
-def test_local_motion_loss_is_rigid_rotation_invariant():
-    generator = torch.Generator().manual_seed(2)
-    human = torch.randn(4, 5, 3, generator=generator)
-    robot = torch.randn(4, 5, 3, generator=generator)
-    frames = torch.from_numpy(build_human_motion_frames(_valid_frames(4))[0]).float()
-    robot_frames = frames.clone()
-    loss, _ = local_motion_loss(human, robot, human_frames=frames, robot_frames=robot_frames)
+def test_local_motion_loss_is_invariant_when_only_human_side_is_rigidly_rotated():
+    """The hard comparison: rotate only human vectors/frames, pin robot fixed."""
+    human = torch.zeros(64, 5, 3)
+    robot = torch.zeros(64, 5, 3)
+    human[..., 0] = 1.0
+    robot[..., 0] = 1.0
+    human_frames = torch.eye(3).reshape(1, 1, 3, 3).expand(64, 5, 3, 3).clone()
+    robot_frames = torch.eye(3).reshape(1, 1, 3, 3).expand(64, 5, 3, 3).clone()
+    local_before, _ = local_motion_loss(
+        human, robot, human_frames=human_frames, robot_frames=robot_frames
+    )
+    global_before, _ = local_motion_loss(human, robot)
 
     theta = torch.tensor(np.pi / 3.0)
     q = torch.tensor(
         [[torch.cos(theta), -torch.sin(theta), 0.0], [torch.sin(theta), torch.cos(theta), 0.0], [0.0, 0.0, 1.0]]
     )
-    loss_rotated, _ = local_motion_loss(
-        human @ q.T, robot @ q.T, q @ frames, q @ robot_frames
+    local_after, _ = local_motion_loss(
+        human @ q.T, robot, q @ human_frames, robot_frames
     )
-    torch.testing.assert_close(loss_rotated, loss, rtol=0.0, atol=1e-6)
+    global_after, _ = local_motion_loss(human @ q.T, robot)
+
+    assert abs((local_after - local_before).item()) < 1e-6
+    assert abs((global_after - global_before).item()) > 1e-2
 
 
 def test_partial_chamfer_optionally_returns_nearest_neighbor_indices():
