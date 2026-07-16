@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,11 @@ import yaml
 
 
 _ALIASES = {"w_dist": "w_distance"}
+
+
+def resolved_config_json(values: dict[str, Any]) -> str:
+    """Render the complete parsed CLI namespace deterministically for run evidence."""
+    return json.dumps(values, sort_keys=True)
 
 
 def apply_yaml_defaults(parser: argparse.ArgumentParser, path: str | Path) -> dict[str, Any]:

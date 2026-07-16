@@ -643,6 +643,7 @@ class GeoRTTrainer:
                 "w_anchor": w_anchor,
                 "anchor_batch_size": anchor_batch_size,
                 "max_steps": max_steps,
+                "resolved_cli_args": kwargs.get("resolved_cli_args"),
             },
         )
         save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
@@ -1014,7 +1015,7 @@ def build_arg_parser():
 
 if __name__ == '__main__':
     import argparse
-    from geort.trainer_cli import apply_yaml_defaults
+    from geort.trainer_cli import apply_yaml_defaults, resolved_config_json
 
     config_probe = argparse.ArgumentParser(add_help=False)
     config_probe.add_argument("--config", default=None)
@@ -1071,6 +1072,8 @@ if __name__ == '__main__':
     if config_path.config:
         apply_yaml_defaults(parser, config_path.config)
     args = parser.parse_args()
+    resolved_cli_args = vars(args).copy()
+    print("trainer resolved config:", resolved_config_json(resolved_cli_args), flush=True)
 
     # Guard: motion_delta below ~0.002 (0.1 mm in metric space) enters the
     # float32 normalisation round-trip noise floor and corrupts the direction
@@ -1138,4 +1141,5 @@ if __name__ == '__main__':
         lr=args.lr,
         max_steps=args.max_steps,
         device=args.device,
+        resolved_cli_args=resolved_cli_args,
         update_latest=not args.no_update_latest)

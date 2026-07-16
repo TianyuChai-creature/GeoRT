@@ -60,3 +60,11 @@ def test_yaml_unquoted_off_normalizes_to_contact_mode_string(tmp_path: Path) -> 
     apply_yaml_defaults(parser, config)
 
     assert parser.parse_args([]).contact_refine == "off"
+
+
+def test_resolved_config_json_preserves_every_parsed_argument() -> None:
+    from geort.trainer_cli import resolved_config_json
+
+    rendered = resolved_config_json({"fk_backend": "neural", "max_steps": 0, "config": "c0.yaml"})
+
+    assert rendered == '{"config": "c0.yaml", "fk_backend": "neural", "max_steps": 0}'
