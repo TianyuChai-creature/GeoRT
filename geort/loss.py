@@ -207,6 +207,14 @@ def null_vector_3x4(jacobian: torch.Tensor, *, eps: float = 1e-6) -> tuple[torch
     vector = torch.where(valid[:, None], minors / norm.clamp_min(eps), torch.zeros_like(minors))
     return vector, valid
 
+
+def nullspace_rows_used(batch_rows: int, subsample: int) -> int:
+    """Return the number of rows participating in a null-space loss step."""
+    if batch_rows <= 0:
+        raise ValueError(f"batch_rows must be positive, got {batch_rows}")
+    return batch_rows if subsample <= 0 else min(subsample, batch_rows)
+
+
 def null_space_loss(
     joint_phys: torch.Tensor,
     q_mid: torch.Tensor,
@@ -229,8 +237,8 @@ def null_space_loss(
 
     Jacobian + null-vector run inside torch.no_grad() — n is detached.
 
-    subsample > 0: randomly select at most `subsample` rows for n computation
-    (saves Jacobian time). Gradient still flows through all B q-deviations.
+    subsample > 0: randomly select at most `subsample` rows and average this
+    regulariser over only those selected rows (saves Jacobian time).
 
     Args:
         joint_phys: Physical joint angles [B, 20] in radians.
@@ -267,12 +275,12 @@ def null_space_loss(
         raise ValueError(f"q_mid out of physical limits")
 
     # ── Subsampling for Jacobian computation ──────────────────────────
-    if subsample > 0 and subsample < B:
-        idx = torch.randperm(B, device=device, generator=generator)[:subsample]
+    rows_used = nullspace_rows_used(B, subsample)
+    if rows_used < B:
+        idx = torch.randperm(B, device=device, generator=generator)[:rows_used]
         joint_phys_sub = joint_phys[idx]  # [S, 20]
     else:
         joint_phys_sub = joint_phys
-        idx = torch.arange(B, device=device)
     S = joint_phys_sub.shape[0]
     # ───────────────────────────────────────────────────────────────────
 
@@ -299,21 +307,10 @@ def null_space_loss(
                     f"norm min={n_norm.min().item():.4f} max={n_norm.max().item():.4f}"
                 )
 
-        # Broadcast n from subsample → full batch (if subsampled)
-        if subsample > 0 and subsample < B:
-            n_full = n_sub[idx.argsort()]  # restore original order — but we actually
-            # need n_full[B] for q_finger[B]. Since n doesn't change much across
-            # samples, map each original sample to its nearest subsampled n.
-            # Simple strategy: assign n_sub to the original indices.
-            n_phys = torch.zeros(B, 4, device=device)
-            n_phys[idx] = n_sub
-        else:
-            n_phys = n_sub
-
         # Deviation along null-space direction (gradient flows here).
         q_finger = joint_phys_sub[:, fj_idx]  # [S, 4] — physical rad
         q_mid_finger = q_mid[fj_idx].unsqueeze(0)  # [1, 4] — physical rad
-        delta = q_finger - q_mid_finger  # [B, 4] — physical rad
+        delta = q_finger - q_mid_finger  # [S, 4] — physical rad
         dev = (delta * n_sub).sum(dim=1)  # [S]
         losses.append(dev.square())
 

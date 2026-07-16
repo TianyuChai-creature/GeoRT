@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import numpy as np
+import random
 import json
 # sapien is used indirectly via HandKinematicModel (geort/env/hand.py).
 # No direct sapien calls remain in trainer.py after SAPIEN 3 migration.
@@ -19,7 +20,7 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss, null_space_loss
+from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss, null_space_loss, nullspace_rows_used
 from geort.keypoint_normalization import (
     fit_finger_normalization,
     normalize_finger_points,
@@ -34,7 +35,9 @@ from datetime import datetime
 from tqdm import tqdm 
 import os
 from pathlib import Path 
+import shlex
 import math
+import sys
 
 def merge_dict_list(dl):
     keys = dl[0].keys()
@@ -534,6 +537,10 @@ class GeoRTTrainer:
                 "mcp1_fist_prior_mcp_weight": mcp1_fist_prior_mcp_weight,
                 "mcp1_fist_prior_pip_weight": mcp1_fist_prior_pip_weight,
                 "mcp1_fist_prior_dip_weight": mcp1_fist_prior_dip_weight,
+                "nullspace_weight": nullspace_weight,
+                "nullspace_subsample": nullspace_subsample,
+                "run_git_commit": kwargs.get("run_git_commit"),
+                "launch_command": kwargs.get("launch_command"),
                 "synergy_lambda": synergy_lambda,
             },
         )
@@ -584,6 +591,7 @@ class GeoRTTrainer:
             point_dataloader = DataLoader(point_dataset_human, batch_size=2048, shuffle=True)
 
         # Training / Optimization
+        nullspace_rows_logged = False
         for epoch in range(n_epoch):
             for batch_idx, batch in enumerate(point_dataloader):
                 direction_loss = 0  # unused, kept for backward compat
@@ -674,6 +682,10 @@ class GeoRTTrainer:
                         subsample=nullspace_subsample,
                         generator=nullspace_generator,
                     )
+                    if not nullspace_rows_logged:
+                        rows_used = nullspace_rows_used(joint_phys.shape[0], nullspace_subsample)
+                        print(f"nullspace rows: {rows_used}/{joint_phys.shape[0]}", flush=True)
+                        nullspace_rows_logged = True
                 else:
                     null_loss = torch.zeros((), device=joint.device)
 
@@ -764,6 +776,8 @@ if __name__ == '__main__':
     parser.add_argument('--fk_backend', choices=('analytic', 'neural'), default='analytic',
                         help='FK backend: analytic (pytorch_kinematics) or neural (MLP).')
     parser.add_argument('--w_chamfer', type=float, default=80.0)
+    parser.add_argument('--epoch', type=int, default=200, help='Training epochs.')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for Python, NumPy, and PyTorch.')
     parser.add_argument('--w_distance', type=float, default=1.0)
     parser.add_argument('--w_curvature', type=float, default=0.1)
     parser.add_argument('--w_motion', type=float, default=1.0)
@@ -789,6 +803,7 @@ if __name__ == '__main__':
                         help='Path to pca_synergy.json for data-driven synergy reference.')
     parser.add_argument('--save_every', type=int, default=0, help='Save epoch_N.pth every N epochs; 0 keeps only last.pth.')
     parser.add_argument('--chamfer_target', choices=('uniform', 'human'), default='uniform', help='Chamfer target cloud source.')
+    parser.add_argument('--run_git_commit', default=None, help='Git commit hash recorded in run metadata.')
     parser.add_argument('--chamfer_target_path', default=None, help='Explicit chamfer target .npz path. Human defaults to data/<hand>_humanshaped.npz.')
     parser.add_argument('--mold_path', default=None, help='Optional mold.json path to record in checkpoint metadata.')
     parser.add_argument('--no_update_latest', action='store_true', help='Do not update checkpoint/<hand>_last.')
@@ -808,6 +823,12 @@ if __name__ == '__main__':
             f"noise-floor lower bound.  Direction signal may be dominated by "
             f"float32 round-trip noise.  Consider --motion_delta >= 0.005."
         )
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     config = get_config(args.hand)
     trainer = GeoRTTrainer(config)
@@ -835,6 +856,10 @@ if __name__ == '__main__':
         mcp1_fist_prior_dip_weight=args.mcp1_fist_prior_dip_weight,
         synergy_weight=args.synergy_weight,
         nullspace_weight=args.nullspace_weight,
+        epoch=args.epoch,
+        seed=args.seed,
+        run_git_commit=args.run_git_commit,
+        launch_command=os.environ.get("GEORT_LAUNCH_COMMAND", " ".join(shlex.quote(arg) for arg in [sys.executable, *sys.argv])),
         synergy_lambda=args.synergy_lambda,
         nullspace_subsample=args.nullspace_subsample,
         pca_synergy_path=args.pca_synergy_path,
