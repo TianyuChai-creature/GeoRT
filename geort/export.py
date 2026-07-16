@@ -58,7 +58,7 @@ class GeoRTRetargetingModel:
         contact_p_lo=0.5,
         contact_p_hi=0.8,
         contact_target_dist=0.0,
-        contact_lambda=0.1,
+        contact_lambda=1e-3,
         contact_refine_steps=40,
     ):
         config = load_json(config_path)
@@ -162,7 +162,7 @@ def resolve_checkpoint_dir(tag=''):
 def load_model(
     tag='', epoch=0, *, contact_refine="off", contact_model_path=None,
     contact_p_lo=0.5, contact_p_hi=0.8, contact_target_dist=0.0,
-    contact_lambda=0.1, contact_refine_steps=40,
+    contact_lambda=1e-3, contact_refine_steps=40,
 ):
     '''
         Loading API.

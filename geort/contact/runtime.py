@@ -71,7 +71,7 @@ class ContactRefiner:
         lower: np.ndarray | None = None,
         upper: np.ndarray | None = None,
         target_distance: float = 0.0,
-        regularization: float = 0.1,
+        regularization: float = 1e-3,
         steps: int = 40,
     ) -> None:
         if tuple(models) != PAIR_NAMES:
@@ -106,7 +106,7 @@ class ContactRefiner:
         *,
         hand_config: dict[str, Any] | None = None,
         target_distance: float = 0.0,
-        regularization: float = 0.1,
+        regularization: float = 1e-3,
         steps: int = 40,
     ) -> "ContactRefiner":
         """Load the D1 four-MLP checkpoint and optional custom-right analytic FK."""

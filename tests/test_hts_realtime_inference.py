@@ -101,7 +101,7 @@ def test_realtime_contact_refinement_cli_defaults_are_opt_in(monkeypatch):
     assert args.contact_p_lo == 0.5
     assert args.contact_p_hi == 0.8
     assert args.contact_target_dist == 0.0
-    assert args.contact_lambda == 0.1
+    assert args.contact_lambda == 1e-3
     assert args.contact_refine_steps == 40
 
 

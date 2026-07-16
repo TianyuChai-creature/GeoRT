@@ -365,7 +365,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--contact_p_lo", "--contact-p-lo", type=float, default=0.5)
     parser.add_argument("--contact_p_hi", "--contact-p-hi", type=float, default=0.8)
     parser.add_argument("--contact-target-dist", type=float, default=0.0, help="Target thumb/finger distance in metres.")
-    parser.add_argument("--contact-lambda", type=float, default=0.1, help="Physical-qpos proximity regularisation.")
+    parser.add_argument("--contact-lambda", type=float, default=1e-3, help="Physical-qpos proximity regularisation.")
     parser.add_argument("--contact-refine-steps", type=int, default=40, help="Fixed CPU projected-Adam iterations.")
     return parser
 
