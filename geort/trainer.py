@@ -408,7 +408,15 @@ class GeoRTTrainer:
         joint_upper_limit_t = torch.tensor(joint_upper, dtype=torch.float32, device='cuda')
         q_mid_t = (joint_lower_limit_t + joint_upper_limit_t) / 2.0
 
-        ik_optim = optim.AdamW(ik_model.parameters(), lr=1e-4)
+        # These defaults preserve the historical formal-training configuration.
+        batch_size = int(kwargs.get("batch_size", 2048))
+        lr = float(kwargs.get("lr", 1e-4))
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if lr <= 0.0:
+            raise ValueError(f"lr must be positive, got {lr}")
+
+        ik_optim = optim.AdamW(ik_model.parameters(), lr=lr)
         nullspace_generator = torch.Generator(device='cuda')
         nullspace_generator.manual_seed(torch.initial_seed())
 
@@ -534,6 +542,8 @@ class GeoRTTrainer:
                 "tag": exp_tag,
                 "fk_backend": fk_backend,
                 "motion_delta": motion_delta,
+                "batch_size": batch_size,
+                "lr": lr,
                 "chamfer_target": chamfer_target,
                 "chamfer_target_path": str(chamfer_target_path) if chamfer_target_path else None,
                 "mold_path": str(mold_path) if mold_path else None,
@@ -616,6 +626,30 @@ class GeoRTTrainer:
         save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
         if update_latest:
             save_training_metadata(Path(last_save_dir) / "training_metadata.json", training_metadata)
+        startup_config = {
+            "anchor_path": str(anchor_path) if anchor_path else None,
+            "batch_size": batch_size,
+            "chamfer_target": chamfer_target,
+            "epoch": n_epoch,
+            "fk_backend": fk_backend,
+            "human_data": str(human_data_path),
+            "lr": lr,
+            "motion_delta": motion_delta,
+            "nullspace_subsample": nullspace_subsample,
+            "nullspace_weight": nullspace_weight,
+            "run_git_commit": kwargs.get("run_git_commit"),
+            "seed": kwargs.get("seed", 0),
+            "synergy_weight": synergy_weight,
+            "w_anchor": w_anchor,
+            "w_chamfer": w_chamfer,
+            "w_collision": w_collision,
+            "w_curvature": w_curvature,
+            "w_distance": w_distance,
+            "w_mcp1_fist_prior": w_mcp1_fist_prior,
+            "w_motion": w_motion,
+            "w_pinch": w_pinch,
+        }
+        print("trainer config:", json.dumps(startup_config, sort_keys=True), flush=True)
 
         if human_frame_weights is not None:
             sampler = WeightedRandomSampler(
@@ -623,10 +657,10 @@ class GeoRTTrainer:
                 num_samples=len(point_dataset_human),
                 replacement=True,
             )
-            point_dataloader = DataLoader(point_dataset_human, batch_size=2048, sampler=sampler)
+            point_dataloader = DataLoader(point_dataset_human, batch_size=batch_size, sampler=sampler)
             print(f"Using frame weights from {describe_human_weight_source(human_data_path)}")
         else:
-            point_dataloader = DataLoader(point_dataset_human, batch_size=2048, shuffle=True)
+            point_dataloader = DataLoader(point_dataset_human, batch_size=batch_size, shuffle=True)
 
         # Shared forward mapping for main samples and isolated anchor samples.
         def forward_human_to_robot(human_normalized):
@@ -861,6 +895,8 @@ if __name__ == '__main__':
     parser.add_argument("--anchor_path", type=str, default="", help="Finalized raw anchor bundle; empty disables L_align.")
     parser.add_argument("--w_anchor", type=float, default=1.0, help="L_align weight when --anchor_path is set.")
     parser.add_argument("--max_steps", type=int, default=0, help="Optional smoke-test step cap; 0 keeps full epochs.")
+    parser.add_argument("--batch_size", type=int, default=2048, help="Main training batch size.")
+    parser.add_argument("--lr", type=float, default=1e-4, help="AdamW learning rate.")
     parser.add_argument('--w_chamfer', type=float, default=80.0)
     parser.add_argument('--epoch', type=int, default=200, help='Training epochs.')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for Python, NumPy, and PyTorch.')
@@ -955,5 +991,7 @@ if __name__ == '__main__':
         mold_path=args.mold_path,
         anchor_path=args.anchor_path,
         w_anchor=args.w_anchor,
+        batch_size=args.batch_size,
+        lr=args.lr,
         max_steps=args.max_steps,
         update_latest=not args.no_update_latest)
