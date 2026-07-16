@@ -215,6 +215,7 @@ def null_space_loss(
     joint_lower: torch.Tensor,
     joint_upper: torch.Tensor,
     subsample: int = 0,
+    generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Per-finger kinematic null-space regularisation (physical joint space).
 
@@ -267,7 +268,7 @@ def null_space_loss(
 
     # ── Subsampling for Jacobian computation ──────────────────────────
     if subsample > 0 and subsample < B:
-        idx = torch.randperm(B, device=device)[:subsample]
+        idx = torch.randperm(B, device=device, generator=generator)[:subsample]
         joint_phys_sub = joint_phys[idx]  # [S, 20]
     else:
         joint_phys_sub = joint_phys
@@ -310,10 +311,10 @@ def null_space_loss(
             n_phys = n_sub
 
         # Deviation along null-space direction (gradient flows here).
-        q_finger = joint_phys[:, fj_idx]  # [B, 4] — physical rad
+        q_finger = joint_phys_sub[:, fj_idx]  # [S, 4] — physical rad
         q_mid_finger = q_mid[fj_idx].unsqueeze(0)  # [1, 4] — physical rad
         delta = q_finger - q_mid_finger  # [B, 4] — physical rad
-        dev = (delta * n_phys).sum(dim=1)  # [B]
+        dev = (delta * n_sub).sum(dim=1)  # [S]
         losses.append(dev.square())
 
     return torch.stack(losses, dim=1).mean()

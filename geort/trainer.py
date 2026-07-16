@@ -403,6 +403,8 @@ class GeoRTTrainer:
         q_mid_t = (joint_lower_limit_t + joint_upper_limit_t) / 2.0
 
         ik_optim = optim.AdamW(ik_model.parameters(), lr=1e-4)
+        nullspace_generator = torch.Generator(device='cuda')
+        nullspace_generator.manual_seed(torch.initial_seed())
 
         # Workspace.
         exp_tag = kwargs.get("tag", "")
@@ -420,7 +422,7 @@ class GeoRTTrainer:
         w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
         synergy_weight = float(kwargs.get("synergy_weight", 0.0))
         nullspace_weight = float(kwargs.get("nullspace_weight", 0.01))
-        nullspace_subsample = int(kwargs.get("nullspace_subsample", 256))
+        nullspace_subsample = int(kwargs.get("nullspace_subsample", 0))
         synergy_lambda = float(kwargs.get("synergy_lambda", 2.0))
         # Load PCA synergy reference if available (data-driven mode).
         pca_synergy_path = kwargs.get("pca_synergy_path", None)
@@ -670,6 +672,7 @@ class GeoRTTrainer:
                         finger_chain_joint_idx,
                         joint_lower_limit_t, joint_upper_limit_t,
                         subsample=nullspace_subsample,
+                        generator=nullspace_generator,
                     )
                 else:
                     null_loss = torch.zeros((), device=joint.device)
@@ -774,10 +777,10 @@ if __name__ == '__main__':
     parser.add_argument('--mcp1_fist_prior_mcp_weight', type=float, default=2.0)
     parser.add_argument('--mcp1_fist_prior_pip_weight', type=float, default=1.0)
     parser.add_argument('--mcp1_fist_prior_dip_weight', type=float, default=0.7)
+    parser.add_argument('--nullspace_subsample', type=int, default=0,
+                        help='Rows used for nullspace loss; 0 keeps the full batch.')
     parser.add_argument('--nullspace_weight', type=float, default=0.01,
                         help='Weight for per-finger kinematic nullspace regularisation; 0 disables.')
-    parser.add_argument('--nullspace_subsample', type=int, default=256,
-                        help='Rows used for nullspace loss; 0 uses the full batch.')
     parser.add_argument('--synergy_weight', type=float, default=0.0,
                         help='Weight for F2-F5 synergy regularisation; 0 disables.')
     parser.add_argument('--synergy_lambda', type=float, default=2.0,
