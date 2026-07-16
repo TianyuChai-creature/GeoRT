@@ -420,6 +420,7 @@ class GeoRTTrainer:
         w_mcp1_fist_prior = kwargs.get("w_mcp1_fist_prior", 0.0)
         synergy_weight = float(kwargs.get("synergy_weight", 0.0))
         nullspace_weight = float(kwargs.get("nullspace_weight", 0.01))
+        nullspace_subsample = int(kwargs.get("nullspace_subsample", 256))
         synergy_lambda = float(kwargs.get("synergy_lambda", 2.0))
         # Load PCA synergy reference if available (data-driven mode).
         pca_synergy_path = kwargs.get("pca_synergy_path", None)
@@ -668,6 +669,7 @@ class GeoRTTrainer:
                         joint_phys, q_mid_t, finger_chains,
                         finger_chain_joint_idx,
                         joint_lower_limit_t, joint_upper_limit_t,
+                        subsample=nullspace_subsample,
                     )
                 else:
                     null_loss = torch.zeros((), device=joint.device)
@@ -774,6 +776,8 @@ if __name__ == '__main__':
     parser.add_argument('--mcp1_fist_prior_dip_weight', type=float, default=0.7)
     parser.add_argument('--nullspace_weight', type=float, default=0.01,
                         help='Weight for per-finger kinematic nullspace regularisation; 0 disables.')
+    parser.add_argument('--nullspace_subsample', type=int, default=256,
+                        help='Rows used for nullspace loss; 0 uses the full batch.')
     parser.add_argument('--synergy_weight', type=float, default=0.0,
                         help='Weight for F2-F5 synergy regularisation; 0 disables.')
     parser.add_argument('--synergy_lambda', type=float, default=2.0,
@@ -829,6 +833,7 @@ if __name__ == '__main__':
         synergy_weight=args.synergy_weight,
         nullspace_weight=args.nullspace_weight,
         synergy_lambda=args.synergy_lambda,
+        nullspace_subsample=args.nullspace_subsample,
         pca_synergy_path=args.pca_synergy_path,
         save_every=args.save_every,
         chamfer_target=args.chamfer_target,

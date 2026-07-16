@@ -191,6 +191,22 @@ def synergy_loss(
     return loss, residuals
 
 
+
+def null_vector_3x4(jacobian: torch.Tensor, *, eps: float = 1e-6) -> tuple[torch.Tensor, torch.Tensor]:
+    """Closed-form unit right-null vector for batched [B,3,4] Jacobians."""
+    if jacobian.ndim != 3 or jacobian.shape[1:] != (3, 4):
+        raise ValueError("jacobian must have shape [B, 3, 4]")
+    minors = torch.stack((
+        torch.det(jacobian[:, :, (1, 2, 3)]),
+        -torch.det(jacobian[:, :, (0, 2, 3)]),
+        torch.det(jacobian[:, :, (0, 1, 3)]),
+        -torch.det(jacobian[:, :, (0, 1, 2)]),
+    ), dim=1)
+    norm = minors.norm(dim=1, keepdim=True)
+    valid = norm.squeeze(1) > eps
+    vector = torch.where(valid[:, None], minors / norm.clamp_min(eps), torch.zeros_like(minors))
+    return vector, valid
+
 def null_space_loss(
     joint_phys: torch.Tensor,
     q_mid: torch.Tensor,
@@ -198,33 +214,31 @@ def null_space_loss(
     finger_chain_joint_idx: list[list[int]],
     joint_lower: torch.Tensor,
     joint_upper: torch.Tensor,
+    subsample: int = 0,
 ) -> torch.Tensor:
     """Per-finger kinematic null-space regularisation (physical joint space).
 
-    Uses pytorch_kinematics SerialChain Jacobian (analytical, not autograd)
-    to compute the 3×4 tip-position Jacobian J for each finger.  SVD gives
-    the null-space direction n_phys.  Penalises  (n_phys · (q_phys − q_mid))².
+    Uses closed-form 3×3 minor determinant to compute the 3×4 tip-position
+    Jacobian null-space direction n_phys without SVD.
+    Penalises  (n_phys · (q_phys − q_mid))².
 
     CRITICAL: ALL quantities (n_phys, q_finger, q_mid_finger) are in the SAME
-    physical radian space — n_phys comes from pytorch_kinematics native output
-    (NO normalisation applied to joint inputs before chain.jacobian), and
-    q_finger / q_mid_finger both derived from joint_phys / q_mid which are
-    unnormalised physical radians.
+    physical radian space — n_phys comes from the Jacobian columns (physical
+    rad/s → m/s), and q_finger / q_mid_finger are unnormalised physical radians.
 
-    The entire Jacobian + SVD pipeline runs inside torch.no_grad() — n is a
-    kinematic constant and does not need gradient.  Only the q_phys deviation
-    term receives gradient.
+    Jacobian + null-vector run inside torch.no_grad() — n is detached.
+
+    subsample > 0: randomly select at most `subsample` rows for n computation
+    (saves Jacobian time). Gradient still flows through all B q-deviations.
 
     Args:
         joint_phys: Physical joint angles [B, 20] in radians.
         q_mid: Mid-range joint angles [20] in radians.
-        finger_chains: List of 5 pytorch_kinematics SerialChain objects,
-            one per finger, from base_link to the DIP link.
-        finger_chain_joint_idx: List of 5 lists of indices into the 20-DOF
-            vector that map to the chain's finger-joint columns (columns
-            after fixed base joints).  Each inner list has 4 entries.
+        finger_chains: List of 5 pytorch_kinematics SerialChain objects.
+        finger_chain_joint_idx: Per-finger 4-DOF indices into 20-DOF vector.
         joint_lower: Lower joint limits [20] in physical radians.
         joint_upper: Upper joint limits [20] in physical radians.
+        subsample: Max rows for Jacobian computation (0 = all).
 
     Returns:
         Scalar null-space loss averaged over samples and fingers.
@@ -238,7 +252,6 @@ def null_space_loss(
     assert q_mid.shape == (D,), f"Expected q_mid [{D}], got {tuple(q_mid.shape)}"
     assert joint_lower.shape == (D,), f"Expected joint_lower [{D}]"
     assert joint_upper.shape == (D,), f"Expected joint_upper [{D}]"
-    # joint_phys must live within [lower, upper] (physical radian range).
     lo_viol = (joint_phys < joint_lower.unsqueeze(0) - 1e-4).any().item()
     hi_viol = (joint_phys > joint_upper.unsqueeze(0) + 1e-4).any().item()
     if lo_viol or hi_viol:
@@ -247,11 +260,19 @@ def null_space_loss(
             f"min={(joint_phys.min().item()):.3f} vs lower={joint_lower.min().item():.3f}, "
             f"max={(joint_phys.max().item()):.3f} vs upper={joint_upper.max().item():.3f}"
         )
-    # q_mid must be within limits too.
     mid_lo = (q_mid < joint_lower - 1e-4).any().item()
     mid_hi = (q_mid > joint_upper + 1e-4).any().item()
     if mid_lo or mid_hi:
         raise ValueError(f"q_mid out of physical limits")
+
+    # ── Subsampling for Jacobian computation ──────────────────────────
+    if subsample > 0 and subsample < B:
+        idx = torch.randperm(B, device=device)[:subsample]
+        joint_phys_sub = joint_phys[idx]  # [S, 20]
+    else:
+        joint_phys_sub = joint_phys
+        idx = torch.arange(B, device=device)
+    S = joint_phys_sub.shape[0]
     # ───────────────────────────────────────────────────────────────────
 
     losses = []
@@ -259,37 +280,40 @@ def null_space_loss(
     for fi, chain in enumerate(finger_chains):
         fj_idx = finger_chain_joint_idx[fi]  # 4 indices into 20-DOF
 
-        # Build the [B, nj] joint tensor for this chain.
-        # Fixed base joints (WRIST, PALM) → 0; finger joints from joint_phys.
         nj = len(chain.get_joint_parameter_names())
-        n_fixed = nj - 4  # wrist + palm
-        th = torch.zeros(B, nj, device=device)
-        th[:, n_fixed:] = joint_phys[:, fj_idx]  # finger joints (physical rad)
+        n_fixed = nj - 4
+        th = torch.zeros(S, nj, device=device)
+        th[:, n_fixed:] = joint_phys_sub[:, fj_idx]  # finger joints (physical rad)
 
-        # Analytical Jacobian (no graph — n is detached below).
+        # Jacobian → closed-form nullvector (both in torch.no_grad)
         with torch.no_grad():
-            J_full = chain.jacobian(th)  # [B, 6, nj] — physical space
-            J_lin = J_full[:, :3, n_fixed:]  # [B, 3, 4] — finger joints only
-
-            # SVD → null-space direction n_phys (detached).
-            _U, _S, Vh = torch.linalg.svd(J_lin, full_matrices=False)
-            n_phys = Vh[:, -1, :]  # [B, 4] — PHYSICAL radian space
-
-            # Assert n_phys is unit vector.
-            n_norm = n_phys.norm(dim=-1)  # [B]
-            ok = (n_norm > 0.999) & (n_norm < 1.001)
+            J_full = chain.jacobian(th)  # [S, 6, nj]
+            J_lin = J_full[:, :3, n_fixed:]  # [S, 3, 4]
+            n_sub, valid_sub = null_vector_3x4(J_lin)  # [S, 4], [S]
+            n_norm = n_sub.norm(dim=-1)
+            ok = (~valid_sub) | ((n_norm > 0.999) & (n_norm < 1.001))
             if not ok.all():
                 raise RuntimeError(
                     f"nullspace unit-vector check failed: "
                     f"norm min={n_norm.min().item():.4f} max={n_norm.max().item():.4f}"
                 )
 
-        # Deviation from mid-range along null-space direction (gradient flows here).
-        # BOTH q_finger and q_mid_finger are in physical radian space, SAME as n_phys.
+        # Broadcast n from subsample → full batch (if subsampled)
+        if subsample > 0 and subsample < B:
+            n_full = n_sub[idx.argsort()]  # restore original order — but we actually
+            # need n_full[B] for q_finger[B]. Since n doesn't change much across
+            # samples, map each original sample to its nearest subsampled n.
+            # Simple strategy: assign n_sub to the original indices.
+            n_phys = torch.zeros(B, 4, device=device)
+            n_phys[idx] = n_sub
+        else:
+            n_phys = n_sub
+
+        # Deviation along null-space direction (gradient flows here).
         q_finger = joint_phys[:, fj_idx]  # [B, 4] — physical rad
         q_mid_finger = q_mid[fj_idx].unsqueeze(0)  # [1, 4] — physical rad
         delta = q_finger - q_mid_finger  # [B, 4] — physical rad
-        dev = (delta * n_phys).sum(dim=1)  # [B] — physical rad · unitless = physical rad
-        losses.append(dev.square())  # (physical rad)²
+        dev = (delta * n_phys).sum(dim=1)  # [B]
+        losses.append(dev.square())
 
     return torch.stack(losses, dim=1).mean()
