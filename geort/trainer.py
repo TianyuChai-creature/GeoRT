@@ -31,6 +31,9 @@ from geort.formatter import HandFormatter
 from geort.dataset import RobotKinematicsDataset, MultiPointDataset, FramePointDataset
 from geort.training_targets import build_training_metadata, resolve_chamfer_target_path, save_training_metadata
 from geort.analytic_fk import AnalyticFK
+from geort.anchor.anchor_runtime_loader import load_anchor_points_for_current_run
+# Runtime adapter performs load_raw_anchor_training_points normalization after the
+# "归一化契约尚未写入" and "human_data_source mismatch" contract checks.
 from datetime import datetime
 from tqdm import tqdm 
 import os
@@ -446,6 +449,10 @@ class GeoRTTrainer:
         chamfer_target = kwargs.get("chamfer_target", "uniform")
         chamfer_target_path = kwargs.get("chamfer_target_path", None)
         mold_path = kwargs.get("mold_path", None)
+        anchor_path = kwargs.get("anchor_path", "")
+        w_anchor = float(kwargs.get("w_anchor", 1.0))
+        anchor_batch_size = 32
+        max_steps = int(kwargs.get("max_steps", 0))
 
         save_dir = f"./checkpoint/{hand_model_name}_{generate_current_timestring()}"
         if exp_tag != '':
@@ -542,6 +549,10 @@ class GeoRTTrainer:
                 "run_git_commit": kwargs.get("run_git_commit"),
                 "launch_command": kwargs.get("launch_command"),
                 "synergy_lambda": synergy_lambda,
+                "anchor_path": str(anchor_path) if anchor_path else None,
+                "w_anchor": w_anchor,
+                "anchor_batch_size": anchor_batch_size,
+                "max_steps": max_steps,
             },
         )
         save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
@@ -579,6 +590,33 @@ class GeoRTTrainer:
         save_json(normalization_metadata, Path(save_dir) / "normalization.json")
         if update_latest:
             save_json(normalization_metadata, Path(last_save_dir) / "normalization.json")
+
+        # Anchor contract is read only after this run wrote normalization.json.
+        anchor_points = None
+        anchor_rng = None
+        normalization_path = Path(save_dir) / "normalization.json"
+        if anchor_path:
+            anchor_points = load_anchor_points_for_current_run(
+                anchor_path, normalization_path, finger_names
+            )
+            anchor_rng = np.random.default_rng(int(kwargs.get("seed", 0)) + 1701)
+            print(
+                f"anchor: {anchor_points.finger_indices.size} pairs from {anchor_path}, "
+                f"w_anchor={w_anchor}",
+                flush=True,
+            )
+            training_metadata["anchor"] = {
+                "enabled": True, "count": int(anchor_points.finger_indices.size),
+                "path": str(anchor_path), "w_anchor": w_anchor,
+                "batch_size": anchor_batch_size, "fk_backend": fk_backend,
+            }
+        else:
+            print("anchor: disabled", flush=True)
+            training_metadata["anchor"] = {"enabled": False, "fk_backend": fk_backend}
+        save_training_metadata(Path(save_dir) / "training_metadata.json", training_metadata)
+        if update_latest:
+            save_training_metadata(Path(last_save_dir) / "training_metadata.json", training_metadata)
+
         if human_frame_weights is not None:
             sampler = WeightedRandomSampler(
                 weights=torch.from_numpy(human_frame_weights).double(),
@@ -590,8 +628,18 @@ class GeoRTTrainer:
         else:
             point_dataloader = DataLoader(point_dataset_human, batch_size=2048, shuffle=True)
 
+        # Shared forward mapping for main samples and isolated anchor samples.
+        def forward_human_to_robot(human_normalized):
+            mapped_joint = ik_model(human_normalized)
+            mapped_metric = fk_model(mapped_joint)
+            mapped_normalized = normalize_finger_points_torch(
+                mapped_metric, finger_names, robot_stats
+            )
+            return mapped_joint, mapped_metric, mapped_normalized
+
         # Training / Optimization
         nullspace_rows_logged = False
+        global_step = 0
         for epoch in range(n_epoch):
             for batch_idx, batch in enumerate(point_dataloader):
                 direction_loss = 0  # unused, kept for backward compat
@@ -605,11 +653,28 @@ class GeoRTTrainer:
                 else:
                     point = batch.cuda()
                     metric_point = point
-                joint = ik_model(point)  # [B, DOF]
-                embedded_metric = fk_model(joint)  # metric [B, K, 3]
-                embedded_point = normalize_finger_points_torch(
-                    embedded_metric, finger_names, robot_stats
-                )  # normalized [B, K, 3]
+                joint, embedded_metric, embedded_point = forward_human_to_robot(point)
+
+                # Anchor rows are isolated from every main-batch loss and regularizer.
+                anchor_loss = None
+                if anchor_points is not None:
+                    anchor_rows = anchor_rng.integers(
+                        anchor_points.finger_indices.size, size=anchor_batch_size
+                    )
+                    anchor_context = torch.from_numpy(
+                        anchor_points.human_contexts[anchor_rows]
+                    ).to(device=point.device, dtype=point.dtype)
+                    anchor_target = torch.from_numpy(
+                        anchor_points.robot_targets[anchor_rows]
+                    ).to(device=point.device, dtype=point.dtype)
+                    anchor_fingers = torch.from_numpy(
+                        anchor_points.finger_indices[anchor_rows]
+                    ).to(device=point.device, dtype=torch.long)
+                    _, _, anchor_embedded = forward_human_to_robot(anchor_context)
+                    anchor_prediction = anchor_embedded[
+                        torch.arange(anchor_batch_size, device=point.device), anchor_fingers
+                    ]
+                    anchor_loss = F.mse_loss(anchor_prediction, anchor_target)
 
                 # [Pinch Loss] — uses metric space (physical threshold in meters).
                 pinch_loss = compute_tip_pinch_loss(metric_point, embedded_metric, pinch_pairs, threshold=pinch_threshold)
@@ -712,7 +777,7 @@ class GeoRTTrainer:
                 # collision Loss integration pending.
                 collision_loss = torch.tensor([0.0]).cuda()
 
-                loss = motion_loss * w_motion + \
+                base_loss = motion_loss * w_motion + \
                        chamfer_loss * w_chamfer + \
                        distance_loss * w_distance + \
                        curvature_loss * w_curvature + \
@@ -721,10 +786,28 @@ class GeoRTTrainer:
                        collision_loss * w_collision + \
                        pinch_loss * w_pinch + \
                        mcp1_fist_prior_loss * w_mcp1_fist_prior
+                loss = (
+                    base_loss + w_anchor * anchor_loss
+                    if anchor_loss is not None else base_loss
+                )
 
                 ik_optim.zero_grad()
                 loss.backward()
                 ik_optim.step()
+                if anchor_loss is not None:
+                    print(f"Step {global_step} L_align: {anchor_loss.item():.8e}", flush=True)
+                if max_steps > 0:
+                    print(
+                        f"Smoke step {global_step} base={base_loss.item():.8e} "
+                        f"motion={motion_loss.item():.8e} chamfer={chamfer_loss.item():.8e} "
+                        f"distance={distance_loss.item():.8e} curvature={curvature_loss.item():.8e} "
+                        f"nullspace={null_loss.item():.8e}",
+                        flush=True,
+                    )
+                global_step += 1
+                if max_steps > 0 and global_step >= max_steps:
+                    torch.save(ik_model.state_dict(), Path(save_dir) / "smoke_step.pth")
+                    return
 
                 if batch_idx % 50 == 0:
                     print(
@@ -775,6 +858,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--fk_backend', choices=('analytic', 'neural'), default='analytic',
                         help='FK backend: analytic (pytorch_kinematics) or neural (MLP).')
+    parser.add_argument("--anchor_path", type=str, default="", help="Finalized raw anchor bundle; empty disables L_align.")
+    parser.add_argument("--w_anchor", type=float, default=1.0, help="L_align weight when --anchor_path is set.")
+    parser.add_argument("--max_steps", type=int, default=0, help="Optional smoke-test step cap; 0 keeps full epochs.")
     parser.add_argument('--w_chamfer', type=float, default=80.0)
     parser.add_argument('--epoch', type=int, default=200, help='Training epochs.')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for Python, NumPy, and PyTorch.')
@@ -867,4 +953,7 @@ if __name__ == '__main__':
         chamfer_target=args.chamfer_target,
         chamfer_target_path=args.chamfer_target_path,
         mold_path=args.mold_path,
+        anchor_path=args.anchor_path,
+        w_anchor=args.w_anchor,
+        max_steps=args.max_steps,
         update_latest=not args.no_update_latest)
