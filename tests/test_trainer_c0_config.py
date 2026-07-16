@@ -47,3 +47,16 @@ def test_chamfer_mode_selects_one_way_or_bidirectional_loss() -> None:
 
     assert partial.item() == 1.0
     assert bidirectional.item() == 2.0
+
+
+def test_yaml_unquoted_off_normalizes_to_contact_mode_string(tmp_path: Path) -> None:
+    from geort.trainer_cli import apply_yaml_defaults
+
+    config = tmp_path / "equiv.yaml"
+    config.write_text("contact_refine: off\n", encoding="utf-8")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--contact_refine", choices=("off", "on"), default="off")
+
+    apply_yaml_defaults(parser, config)
+
+    assert parser.parse_args([]).contact_refine == "off"

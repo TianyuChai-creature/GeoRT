@@ -19,6 +19,10 @@ def apply_yaml_defaults(parser: argparse.ArgumentParser, path: str | Path) -> di
     if not isinstance(loaded, dict):
         raise ValueError(f"trainer config must be a mapping: {source}")
     values = {_ALIASES.get(str(key), str(key)): value for key, value in loaded.items()}
+    # YAML 1.1 treats unquoted "on"/"off" as booleans; the public C0
+    # contract intentionally uses contact_refine: off, so restore its CLI enum.
+    if isinstance(values.get("contact_refine"), bool):
+        values["contact_refine"] = "on" if values["contact_refine"] else "off"
     destinations = {action.dest for action in parser._actions}
     unknown = sorted(set(values).difference(destinations))
     if unknown:
