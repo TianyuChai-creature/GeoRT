@@ -299,11 +299,13 @@ class GeoRTTrainer:
         os.makedirs("checkpoint", exist_ok=True)
         return f"checkpoint/fk_model_{name}.pth"
     
-    def get_robot_neural_fk_model(self, force_train=False):
+    def get_robot_neural_fk_model(self, force_train=False, *, device=None):
         '''
             This function will return a forward kinematics model.
             If the fk model does not exist, this function will train one first.
         '''
+
+        device = torch.device('cuda' if device is None else device)
 
         # Normalizer.
         joint_lower_limit, joint_upper_limit = self.hand.get_joint_limit()
@@ -311,12 +313,12 @@ class GeoRTTrainer:
         
         # Model.
         print(self.get_keypoint_info()["joint"])
-        fk_model = FKModel(keypoint_joints=self.get_keypoint_info()["joint"]).cuda()
+        fk_model = FKModel(keypoint_joints=self.get_keypoint_info()["joint"]).to(device)
         
         # If the model exists, load it.
         fk_checkpoint_path = self.get_fk_checkpoint_path()
         if os.path.exists(fk_checkpoint_path) and not force_train:
-            fk_model.load_state_dict(torch.load(fk_checkpoint_path))
+            fk_model.load_state_dict(torch.load(fk_checkpoint_path, map_location=device))
 
         else:
             # If the model does not exist, train it.
@@ -330,8 +332,8 @@ class GeoRTTrainer:
             for epoch in range(200):
                 all_fk_error = 0
                 for batch_idx, batch in enumerate(fk_dataloader):
-                    keypoint = batch["keypoint"].cuda().float()
-                    qpos = batch["qpos"].cuda().float() 
+                    keypoint = batch["keypoint"].to(device).float()
+                    qpos = batch["qpos"].to(device).float()
                     qpos = qpos_normalizer.normalize_torch(qpos)
                     predicted_keypoint = fk_model(qpos)
                     fk_optim.zero_grad()
@@ -354,6 +356,10 @@ class GeoRTTrainer:
             This is the main trainer.
         '''
 
+        device = torch.device(kwargs.get('device', 'cuda'))
+        if device.type == 'cuda' and not torch.cuda.is_available():
+            raise RuntimeError('--device cuda requested but CUDA is unavailable')
+
         keypoint_info = self.get_keypoint_info()
         fk_backend = kwargs.get("fk_backend", "analytic")
         if fk_backend not in ("analytic", "neural"):
@@ -368,16 +374,16 @@ class GeoRTTrainer:
                 np.array(joint_lower),
                 np.array(joint_upper),
                 tip_offsets=tip_offsets,
-            )
+            ).to(device)
             print(f"Using analytic FK backend (pytorch_kinematics from URDF)")
         else:
-            fk_model = self.get_robot_neural_fk_model()
+            fk_model = self.get_robot_neural_fk_model(device=device)
             print(f"Using neural FK backend")
 
         ik_model = IKModel(
             finger_groups=keypoint_info["finger_groups"],
             n_total_joint=len(self.config["joint_order"]),
-        ).cuda()
+        ).to(device)
         os.makedirs("./checkpoint", exist_ok=True)
 
         import pytorch_kinematics as pk
@@ -393,19 +399,19 @@ class GeoRTTrainer:
                 open(self.config["urdf_path"]).read(),
                 tip_link_names[fi],
                 self.config["base_link"],
-            ).to(device='cuda')
+            ).to(device=device)
             finger_chains.append(chain)
             # Tip offset as [1, 3] tensor.
             off = keypoint_info.get("offset", [[0, 0, 0]] * 5)[fi]
-            finger_offsets.append(torch.tensor(off, dtype=torch.float32, device='cuda').view(1, 3))
+            finger_offsets.append(torch.tensor(off, dtype=torch.float32, device=device).view(1, 3))
             # Map from chain joint order to the 4 finger joints.
             chain_names = chain.get_joint_parameter_names()
             # Last 4 names in the chain are the finger joints.
             fj_names = chain_names[-4:]
             fj_idx = [joint_order.index(n) for n in fj_names]
             finger_chain_joint_idx.append(fj_idx)
-        joint_lower_limit_t = torch.tensor(joint_lower, dtype=torch.float32, device='cuda')
-        joint_upper_limit_t = torch.tensor(joint_upper, dtype=torch.float32, device='cuda')
+        joint_lower_limit_t = torch.tensor(joint_lower, dtype=torch.float32, device=device)
+        joint_upper_limit_t = torch.tensor(joint_upper, dtype=torch.float32, device=device)
         q_mid_t = (joint_lower_limit_t + joint_upper_limit_t) / 2.0
 
         # These defaults preserve the historical formal-training configuration.
@@ -417,7 +423,7 @@ class GeoRTTrainer:
             raise ValueError(f"lr must be positive, got {lr}")
 
         ik_optim = optim.AdamW(ik_model.parameters(), lr=lr)
-        nullspace_generator = torch.Generator(device='cuda')
+        nullspace_generator = torch.Generator(device=device)
         nullspace_generator.manual_seed(torch.initial_seed())
 
         # Workspace.
@@ -475,10 +481,10 @@ class GeoRTTrainer:
         joint_lower_limit, joint_upper_limit = self.hand.get_joint_limit()
         joint_lower_limit_t = torch.from_numpy(
             np.array(joint_lower_limit, dtype=np.float32)
-        ).cuda()
+        ).to(device)
         joint_upper_limit_t = torch.from_numpy(
             np.array(joint_upper_limit, dtype=np.float32)
-        ).cuda()
+        ).to(device)
         joint_half_range_t = (joint_upper_limit_t - joint_lower_limit_t) / 2.0
 
         export_config = self.config.copy()
@@ -680,12 +686,12 @@ class GeoRTTrainer:
 
                 mcp1_fist_prior_mask = None
                 if isinstance(batch, dict):
-                    point = batch["point"].cuda()  # normalized [B, K, 3]
-                    metric_point = batch["metric_point"].cuda()  # metric [B, K, 3]
+                    point = batch["point"].to(device)  # normalized [B, K, 3]
+                    metric_point = batch["metric_point"].to(device)  # metric [B, K, 3]
                     if "mcp1_fist_prior_mask" in batch:
-                        mcp1_fist_prior_mask = batch["mcp1_fist_prior_mask"].cuda()
+                        mcp1_fist_prior_mask = batch["mcp1_fist_prior_mask"].to(device)
                 else:
-                    point = batch.cuda()
+                    point = batch.to(device)
                     metric_point = point
                 joint, embedded_metric, embedded_point = forward_human_to_robot(point)
 
@@ -731,7 +737,7 @@ class GeoRTTrainer:
                 
                 # [Chamfer loss]
                 selected_idx = np.random.randint(0, robot_points.shape[1], 2048) 
-                target = torch.from_numpy(robot_points[:, selected_idx, :]).permute(1, 0, 2).float().cuda()
+                target = torch.from_numpy(robot_points[:, selected_idx, :]).permute(1, 0, 2).float().to(device)
                 
                 chamfer_by_keypoint = []
                 for i in range(n_keypoints):
@@ -809,7 +815,7 @@ class GeoRTTrainer:
                 #     collision_loss = criterion(safe_logits, real_labels)
                 
                 # collision Loss integration pending.
-                collision_loss = torch.tensor([0.0]).cuda()
+                collision_loss = torch.tensor([0.0], device=device)
 
                 base_loss = motion_loss * w_motion + \
                        chamfer_loss * w_chamfer + \
@@ -883,9 +889,21 @@ class GeoRTTrainer:
         return 
 
 
-if __name__ == '__main__':
-    import argparse 
+def build_arg_parser():
+    import argparse
+
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--device',
+        choices=('cuda', 'cpu'),
+        default='cuda',
+        help='Training device. Defaults to CUDA for backward-compatible runs.',
+    )
+    return parser
+
+
+if __name__ == '__main__':
+    parser = build_arg_parser()
     parser.add_argument('-hand', type=str, default='allegro_right')
     parser.add_argument('-human_data', type=str, default='human')
     parser.add_argument('-ckpt_tag', type=str, default='')
@@ -949,7 +967,7 @@ if __name__ == '__main__':
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
+    if args.device == 'cuda' and torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
     config = get_config(args.hand)
@@ -994,4 +1012,5 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         lr=args.lr,
         max_steps=args.max_steps,
+        device=args.device,
         update_latest=not args.no_update_latest)
