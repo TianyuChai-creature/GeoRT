@@ -423,9 +423,12 @@ class GeoRTTrainer:
         if motion_frame == "local" and chamfer_mode != "partial":
             raise ValueError("motion_frame='local' requires chamfer_mode='partial' for nearest-neighbor rotation reuse")
 
+        # Acquire physical limits before selecting an FK backend: the
+        # nullspace chains below need the same limits for analytic and neural FK.
+        joint_lower, joint_upper = self.hand.get_joint_limit()
+
         # Acquire FK model based on backend.
         if fk_backend == "analytic":
-            joint_lower, joint_upper = self.hand.get_joint_limit()
             tip_offsets = keypoint_info.get("offset")
             fk_model = AnalyticFK(
                 self.config["urdf_path"],
