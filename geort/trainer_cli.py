@@ -1,0 +1,27 @@
+"""Small, testable YAML-default adapter for the trainer CLI."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+_ALIASES = {"w_dist": "w_distance"}
+
+
+def apply_yaml_defaults(parser: argparse.ArgumentParser, path: str | Path) -> dict[str, Any]:
+    """Apply a mapping of parser defaults; later explicit CLI flags still win."""
+    source = Path(path)
+    loaded = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(f"trainer config must be a mapping: {source}")
+    values = {_ALIASES.get(str(key), str(key)): value for key, value in loaded.items()}
+    destinations = {action.dest for action in parser._actions}
+    unknown = sorted(set(values).difference(destinations))
+    if unknown:
+        raise ValueError(f"trainer config contains unknown keys: {unknown}")
+    parser.set_defaults(**values)
+    return values

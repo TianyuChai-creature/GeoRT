@@ -20,7 +20,7 @@ from geort.dataset_manifest import maybe_load_dataset_manifest
 from geort.utils.config_utils import get_config, parse_config_keypoint_info, save_json, select_keypoint_types
 from geort.model import FKModel, IKModel 
 from geort.env.hand import HandKinematicModel
-from geort.loss import partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss, null_space_loss, nullspace_rows_used
+from geort.loss import chamfer_distance, partial_chamfer_distance, distance_preservation, local_motion_loss, synergy_loss, null_space_loss, nullspace_rows_used
 from geort.keypoint_normalization import (
     fit_finger_normalization,
     normalize_finger_points,
@@ -57,6 +57,14 @@ def merge_dict_list(dl):
 def format_loss(value):
     return f"{value:.4e}" if math.fabs(value) < 1e-3 else f"{value:.4f}"
 
+
+def chamfer_loss_for_keypoint(mapped, target, *, mode: str):
+    """Compute one keypoint Chamfer loss without changing the partial default."""
+    if mode == "partial":
+        return partial_chamfer_distance(mapped, target)
+    if mode == "bidirectional":
+        return chamfer_distance(mapped, target)
+    raise ValueError(f"Unknown chamfer_mode: {mode!r}")
 
 
 
@@ -406,6 +414,14 @@ class GeoRTTrainer:
         motion_frame = kwargs.get("motion_frame", "global")
         if motion_frame not in ("global", "local"):
             raise ValueError(f"Unknown motion_frame: {motion_frame!r}")
+        chamfer_mode = kwargs.get("chamfer_mode", "partial")
+        if chamfer_mode not in ("partial", "bidirectional"):
+            raise ValueError(f"Unknown chamfer_mode: {chamfer_mode!r}")
+        contact_refine = kwargs.get("contact_refine", "off")
+        if contact_refine not in ("off", "on"):
+            raise ValueError(f"Unknown contact_refine: {contact_refine!r}")
+        if motion_frame == "local" and chamfer_mode != "partial":
+            raise ValueError("motion_frame='local' requires chamfer_mode='partial' for nearest-neighbor rotation reuse")
 
         # Acquire FK model based on backend.
         if fk_backend == "analytic":
@@ -601,6 +617,8 @@ class GeoRTTrainer:
                 "fk_backend": fk_backend,
                 "motion_delta": motion_delta,
                 "motion_frame": motion_frame,
+                "chamfer_mode": chamfer_mode,
+                "contact_refine": contact_refine,
                 "batch_size": batch_size,
                 "lr": lr,
                 "chamfer_target": chamfer_target,
@@ -695,6 +713,8 @@ class GeoRTTrainer:
             "anchor_path": str(anchor_path) if anchor_path else None,
             "batch_size": batch_size,
             "chamfer_target": chamfer_target,
+            "chamfer_mode": chamfer_mode,
+            "contact_refine": contact_refine,
             "epoch": n_epoch,
             "fk_backend": fk_backend,
             "human_data": str(human_data_path),
@@ -812,7 +832,10 @@ class GeoRTTrainer:
                         chamfer_by_keypoint.append(chamfer_value)
                         nearest_robot_indices.append(nearest_index.squeeze(0))
                     else:
-                        chamfer_by_keypoint.append(partial_chamfer_distance(embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0)))
+                        chamfer_by_keypoint.append(chamfer_loss_for_keypoint(
+                            embedded_point[:, i, :].unsqueeze(0), target[:, i, :].unsqueeze(0),
+                            mode=chamfer_mode,
+                        ))
                 chamfer_loss = torch.stack(chamfer_by_keypoint).mean()
 
                 # [Distance Preservation]
@@ -976,6 +999,7 @@ def build_arg_parser():
     import argparse
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=None, help="Optional YAML defaults; explicit CLI flags override.")
     parser.add_argument(
         '--device',
         choices=('cuda', 'cpu'),
@@ -986,6 +1010,12 @@ def build_arg_parser():
 
 
 if __name__ == '__main__':
+    import argparse
+    from geort.trainer_cli import apply_yaml_defaults
+
+    config_probe = argparse.ArgumentParser(add_help=False)
+    config_probe.add_argument("--config", default=None)
+    config_path, _ = config_probe.parse_known_args()
     parser = build_arg_parser()
     parser.add_argument('-hand', type=str, default='allegro_right')
     parser.add_argument('-human_data', type=str, default='human')
@@ -993,6 +1023,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--fk_backend', choices=('analytic', 'neural'), default='analytic',
                         help='FK backend: analytic (pytorch_kinematics) or neural (MLP).')
+    parser.add_argument('--chamfer_mode', choices=('partial', 'bidirectional'), default='partial')
+    parser.add_argument('--contact_refine', choices=('off', 'on'), default='off',
+                        help='Recorded runtime contact mode; trainer loss is unaffected.')
     parser.add_argument("--anchor_path", type=str, default="", help="Finalized raw anchor bundle; empty disables L_align.")
     parser.add_argument("--w_anchor", type=float, default=1.0, help="L_align weight when --anchor_path is set.")
     parser.add_argument("--max_steps", type=int, default=0, help="Optional smoke-test step cap; 0 keeps full epochs.")
@@ -1032,6 +1065,8 @@ if __name__ == '__main__':
     parser.add_argument('--mold_path', default=None, help='Optional mold.json path to record in checkpoint metadata.')
     parser.add_argument('--no_update_latest', action='store_true', help='Do not update checkpoint/<hand>_last.')
 
+    if config_path.config:
+        apply_yaml_defaults(parser, config_path.config)
     args = parser.parse_args()
 
     # Guard: motion_delta below ~0.002 (0.1 mm in metric space) enters the
@@ -1064,6 +1099,8 @@ if __name__ == '__main__':
         human_data_path, 
         tag=args.ckpt_tag,
         fk_backend=args.fk_backend,
+        chamfer_mode=args.chamfer_mode,
+        contact_refine=args.contact_refine,
         w_chamfer=args.w_chamfer,
         w_distance=args.w_distance,
         w_curvature=args.w_curvature,

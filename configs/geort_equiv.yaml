@@ -1,0 +1,12 @@
+# C0 equivalence baseline. `w_dist` is mapped to trainer's `w_distance` field.
+fk_backend: neural
+chamfer_mode: bidirectional
+motion_frame: global
+w_dist: 0.0
+anchor_path: ""
+nullspace_weight: 0.0
+contact_refine: off
+lr: 0.0001
+batch_size: 2048
+epoch: 200
+motion_delta: 0.01
