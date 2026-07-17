@@ -81,11 +81,11 @@ class LatestPointBuffer:
     ) -> ReceivedPoints:
         if isinstance(points, ReceivedPoints):
             return points
-        if hasattr(points, "points") and hasattr(points, "recv_ts_ns"):
+        if hasattr(points, "points"):
             return ReceivedPoints(
                 points=np.asarray(points.points, dtype=np.float32),
-                recv_ts_s=float(points.recv_ts_ns) / 1e9,
-                sender_ts_ns=getattr(points, "source_ts_ns", None),
+                recv_ts_s=time.monotonic() if recv_ts_s is None else float(recv_ts_s),
+                sender_ts_ns=getattr(points, "source_ts_ns", None) if sender_ts_ns is None else sender_ts_ns,
             )
         return ReceivedPoints(
             points=np.asarray(points, dtype=np.float32),
@@ -128,13 +128,41 @@ def start_point_receiver(
     def receive() -> None:
         try:
             for points in points_iter:
-                point_buffer.put(points)
+                point_buffer.put(
+                    points,
+                    recv_ts_s=time.monotonic(),
+                    sender_ts_ns=getattr(points, "source_ts_ns", None),
+                )
         except Exception as exc:  # pragma: no cover - surfaced in live terminal output.
             print(f"[HTSRealtime] Receiver stopped: {exc}")
 
     thread = threading.Thread(target=receive, name=f"hts-{hand_side}-point-receiver", daemon=True)
     thread.start()
     return thread
+
+
+def iter_recorded_replay(
+    session_path: Path | str,
+    *,
+    sleep_fn=time.sleep,
+) -> Iterable[np.ndarray]:
+    """Replay raw recorded points with their recorded receiver-domain cadence."""
+    frames_path = Path(session_path) / "frames.npz"
+    with np.load(frames_path) as frames:
+        if "raw_points" not in frames or "t_recv_s" not in frames:
+            raise ValueError(f"Replay session lacks raw_points/t_recv_s: {frames_path}")
+        raw_points = np.asarray(frames["raw_points"], dtype=np.float32)
+        recv_ts_s = np.asarray(frames["t_recv_s"], dtype=np.float64)
+    if raw_points.shape[0] != recv_ts_s.shape[0]:
+        raise ValueError("Replay raw_points and t_recv_s length mismatch")
+    if raw_points.ndim != 3 or raw_points.shape[1:] != (EXPECTED_HTS_LANDMARKS, 3):
+        raise ValueError(f"Replay points must have shape (N, {EXPECTED_HTS_LANDMARKS}, 3)")
+    if not np.isfinite(recv_ts_s).all():
+        raise ValueError("Replay t_recv_s contains non-finite values")
+    for index, points in enumerate(raw_points):
+        if index:
+            sleep_fn(max(0.0, float(recv_ts_s[index] - recv_ts_s[index - 1])))
+        yield points
 
 
 def validate_live_points(points: np.ndarray) -> np.ndarray | None:
@@ -355,7 +383,10 @@ def run_realtime_viewer_loop(
         qpos = scale_and_clamp_qpos(mapped_qpos, hand, qpos_scale)
         if safety_controller is not None:
             qpos = safety_controller.accept(
-                qpos, now_s=time.monotonic(), bypass_rate_limit=diagnostic_rate_limit_bypass,
+                qpos,
+                now_s=time.monotonic(),
+                recv_ts_s=received.recv_ts_s,
+                bypass_rate_limit=diagnostic_rate_limit_bypass,
             )
         hand.set_qpos_target(qpos)
         t_out = time.monotonic()
@@ -404,6 +435,7 @@ def run_realtime_inference(
     start_time = time.monotonic()
 
     for raw_points in points_iter:
+        recv_ts_s = time.monotonic()
         for _ in range(viewer_updates_per_frame):
             if viewer_env.update() is False:
                 return processed
@@ -418,7 +450,7 @@ def run_realtime_inference(
         _, mapped_qpos = map_realtime_frame(model, points)
         qpos = scale_and_clamp_qpos(mapped_qpos, hand, qpos_scale)
         if safety_controller is not None:
-            qpos = safety_controller.accept(qpos, now_s=time.monotonic())
+            qpos = safety_controller.accept(qpos, now_s=time.monotonic(), recv_ts_s=recv_ts_s)
         hand.set_qpos_target(qpos)
         _record_frame(session_recorder, model, timestamp_s=time.time(), raw_points=points, mapped=mapped_qpos, output=qpos)
         if contact_visualizer is not None:
@@ -477,7 +509,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage", choices=("1", "2", "3"), default="1", help="1=SAPIEN mirror, 2=robot contact off, 3=robot contact on.")
     parser.add_argument("--watchdog-ms", type=float, default=200.0, help="Freeze after this much input silence.")
     parser.add_argument("--ramp-frames", type=int, default=100, help="Frames used after startup/watchdog recovery.")
-    parser.add_argument("--max-joint-step", type=float, default=0.05, help="Per-joint qpos limit in rad/frame.")
+    parser.add_argument("--max-joint-speed", type=float, default=None, help="Required non-diagnostic speed limit in rad/s.")
     parser.add_argument("--estop-key", default="space", help="SAPIEN viewer key that latches immediate emergency stop.")
     parser.add_argument("--freeze-key", default="f", help="SAPIEN viewer key that stores the current evidence frame.")
     parser.add_argument(
@@ -497,6 +529,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=9000, help="Bind/connect port for HTS streaming.")
     parser.add_argument("--timeout-s", type=float, default=1.0, help="Socket receive timeout in seconds.")
     parser.add_argument("--max-frames", type=int, default=None, help="Optional frame limit for smoke tests.")
+    parser.add_argument("--replay-session", default=None, help="Recorded session directory; replays raw points at recorded receive cadence.")
     parser.add_argument(
         "--smoothing-alpha",
         type=float,
@@ -565,8 +598,12 @@ def main() -> None:
         raise ValueError("--render-mode headless is only valid for Stage 1 diagnostics")
     if args.diagnostic_rate_limit_bypass and args.stage != "1":
         raise ValueError("--diagnostic-rate-limit-bypass is only valid for Stage 1 diagnostics")
-    if args.watchdog_ms <= 0.0 or args.ramp_frames <= 0 or args.max_joint_step <= 0.0:
-        raise ValueError("watchdog, ramp and max joint step must be positive")
+    if args.watchdog_ms <= 0.0 or args.ramp_frames <= 0:
+        raise ValueError("watchdog and ramp must be positive")
+    if args.max_joint_speed is not None and args.max_joint_speed <= 0.0:
+        raise ValueError("max joint speed must be positive when provided")
+    if args.max_joint_speed is None and not args.diagnostic_rate_limit_bypass:
+        raise ValueError("--max-joint-speed is required unless --diagnostic-rate-limit-bypass is set")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)
     provenance = verify_archived_checkpoint(checkpoint, args.archive_root, repo_root=Path.cwd())
     require_c2b_s42_sha(provenance.last_pth_sha256)
@@ -595,7 +632,7 @@ def main() -> None:
     lower, upper = hand.get_joint_limit()
     safety_controller = RealtimeSafetyController(
         lower=lower, upper=upper, initial_qpos=(np.asarray(lower) + np.asarray(upper)) / 2.0,
-        ramp_frames=args.ramp_frames, max_joint_step=args.max_joint_step, watchdog_s=args.watchdog_ms / 1000.0,
+        ramp_frames=args.ramp_frames, max_joint_speed=args.max_joint_speed, watchdog_s=args.watchdog_ms / 1000.0,
     )
     session_recorder = SessionRecorder(args.session_root)
     viewer_env = hand.get_viewer_env() if args.render_mode == "inline" else HeadlessViewerEnv()
@@ -611,17 +648,23 @@ def main() -> None:
         )
 
     point_buffer = LatestPointBuffer()
-    points_iter = iter_hts_points(
-        hand_side=hand_side,
-        transport=args.transport,
-        host=args.host,
-        port=args.port,
-        timeout_s=args.timeout_s,
-        include_timestamps=True,
-    )
-    start_point_receiver(points_iter, point_buffer, hand_side=hand_side)
+    if args.replay_session:
+        points_iter = iter_recorded_replay(args.replay_session)
+        receiver_name = "recorded-replay"
+        print(f"[HTSRealtime] Replaying receive cadence from {args.replay_session}")
+    else:
+        points_iter = iter_hts_points(
+            hand_side=hand_side,
+            transport=args.transport,
+            host=args.host,
+            port=args.port,
+            timeout_s=args.timeout_s,
+            include_timestamps=True,
+        )
+        receiver_name = hand_side
+        print(f"[HTSRealtime] Listening for {hand_side}-hand HTS frames on {args.transport}://{args.host}:{args.port}")
+    start_point_receiver(points_iter, point_buffer, hand_side=receiver_name)
 
-    print(f"[HTSRealtime] Listening for {hand_side}-hand HTS frames on {args.transport}://{args.host}:{args.port}")
     print("[HTSRealtime] Press Ctrl-C or close the viewer to stop.")
 
     try:
@@ -660,7 +703,9 @@ def main() -> None:
                 "render_mode": args.render_mode,
                 "diagnostic_rate_limit_bypass": args.diagnostic_rate_limit_bypass,
                 "ramp_frames": args.ramp_frames,
-                "max_joint_step_rad": args.max_joint_step,
+                "max_joint_speed_rad_s": args.max_joint_speed,
+                "max_joint_step_cap_rad": RealtimeSafetyController.MAX_JOINT_STEP_RAD,
+                "rate_dt_cap_ms": RealtimeSafetyController.MAX_RATE_DT_S * 1000.0,
                 "watchdog_ms": args.watchdog_ms,
             },
         )

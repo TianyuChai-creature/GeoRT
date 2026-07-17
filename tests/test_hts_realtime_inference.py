@@ -204,3 +204,40 @@ def test_latest_point_buffer_preserves_receive_timestamps(monkeypatch):
     assert frame.recv_ts_s == 12.5
     assert frame.sender_ts_ns == 99
     np.testing.assert_allclose(frame.points, np.zeros((21, 3), dtype=np.float32))
+
+
+def test_receiver_thread_stamps_packet_arrival_not_sdk_frame_timestamp(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+    monkeypatch.setattr(realtime.time, "monotonic", lambda: 42.5)
+    buffer = realtime.LatestPointBuffer()
+
+    packet = type("Packet", (), {
+        "points": np.zeros((21, 3), dtype=np.float32),
+        "recv_ts_ns": 7,
+        "source_ts_ns": 99,
+    })()
+    receiver = realtime.start_point_receiver(iter((packet,)), buffer)
+    receiver.join(timeout=1.0)
+    frame = buffer.get_latest()
+
+    assert frame.recv_ts_s == 42.5
+    assert frame.sender_ts_ns == 99
+
+
+def test_recorded_replay_preserves_frame_order_and_receive_intervals(monkeypatch, tmp_path):
+    realtime = load_realtime_module(monkeypatch)
+    session = tmp_path / "session"
+    session.mkdir()
+    np.savez(
+        session / "frames.npz",
+        raw_points=np.stack((np.zeros((21, 3), dtype=np.float32), np.ones((21, 3), dtype=np.float32))),
+        t_recv_s=np.array([10.0, 10.025], dtype=np.float64),
+    )
+    sleeps = []
+
+    replayed = list(realtime.iter_recorded_replay(session, sleep_fn=sleeps.append))
+
+    assert len(replayed) == 2
+    np.testing.assert_allclose(replayed[0], 0.0)
+    np.testing.assert_allclose(replayed[1], 1.0)
+    np.testing.assert_allclose(sleeps, [0.025])

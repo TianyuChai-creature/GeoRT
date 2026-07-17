@@ -38,6 +38,9 @@ def scale_and_clamp_qpos(
 class RealtimeSafetyController:
     """Clamp, ramp and freeze realtime qpos commands without mutating the mapper."""
 
+    MAX_RATE_DT_S = 0.05
+    MAX_JOINT_STEP_RAD = 0.2
+
     def __init__(
         self,
         *,
@@ -45,13 +48,13 @@ class RealtimeSafetyController:
         upper: np.ndarray,
         initial_qpos: np.ndarray,
         ramp_frames: int = 100,
-        max_joint_step: float = 0.05,
+        max_joint_speed: float | None = None,
         watchdog_s: float = 0.2,
     ) -> None:
         if ramp_frames <= 0:
             raise ValueError("ramp_frames must be positive")
-        if max_joint_step <= 0.0:
-            raise ValueError("max_joint_step must be positive")
+        if max_joint_speed is not None and max_joint_speed <= 0.0:
+            raise ValueError("max_joint_speed must be positive when provided")
         if watchdog_s <= 0.0:
             raise ValueError("watchdog_s must be positive")
         self.lower = np.asarray(lower, dtype=np.float32)
@@ -60,12 +63,13 @@ class RealtimeSafetyController:
         if self.last_qpos.shape != self.lower.shape or self.lower.shape != self.upper.shape:
             raise ValueError("lower, upper and initial_qpos must share the same shape")
         self.ramp_frames = int(ramp_frames)
-        self.max_joint_step = float(max_joint_step)
+        self.max_joint_speed = None if max_joint_speed is None else float(max_joint_speed)
         self.watchdog_s = float(watchdog_s)
         self.counters = RealtimeCounters()
         self._ramp_start = self.last_qpos.copy()
         self._ramp_index = 0
         self._last_input_s: float | None = None
+        self._last_recv_ts_s: float | None = None
         self._estop_latched = False
         self._watchdog_latched = False
 
@@ -95,8 +99,15 @@ class RealtimeSafetyController:
             self._start_ramp()
         return self.last_qpos.copy()
 
-    def accept(self, qpos: np.ndarray, *, now_s: float, bypass_rate_limit: bool = False) -> np.ndarray:
-        """Return the safe target for one candidate qpos at monotonic time ``now_s``."""
+    def accept(
+        self,
+        qpos: np.ndarray,
+        *,
+        now_s: float,
+        recv_ts_s: float | None = None,
+        bypass_rate_limit: bool = False,
+    ) -> np.ndarray:
+        """Return the safe target using receiver-domain input cadence for rate limiting."""
         candidate = np.asarray(qpos, dtype=np.float32)
         if candidate.shape != self.last_qpos.shape:
             raise ValueError(f"Expected qpos shape {self.last_qpos.shape}, got {candidate.shape}")
@@ -117,7 +128,19 @@ class RealtimeSafetyController:
             target = self._ramp_start + alpha * (target - self._ramp_start)
         target = np.clip(target, self.lower, self.upper)
         delta = target - self.last_qpos
-        limited_delta = delta if bypass_rate_limit else np.clip(delta, -self.max_joint_step, self.max_joint_step)
+        if bypass_rate_limit:
+            limited_delta = delta
+        else:
+            if self.max_joint_speed is None:
+                raise ValueError("max_joint_speed is required unless rate limiting is bypassed")
+            if recv_ts_s is None:
+                raise ValueError("recv_ts_s is required for receiver-clock rate limiting")
+            recv_ts_s = float(recv_ts_s)
+            raw_dt_s = 0.0 if self._last_recv_ts_s is None else recv_ts_s - self._last_recv_ts_s
+            dt_s = min(max(raw_dt_s, 0.0), self.MAX_RATE_DT_S)
+            self._last_recv_ts_s = recv_ts_s
+            step_cap = min(self.max_joint_speed * dt_s, self.MAX_JOINT_STEP_RAD)
+            limited_delta = np.clip(delta, -step_cap, step_cap)
         if not bypass_rate_limit and not np.array_equal(delta, limited_delta):
             self.counters.rate_limited += int(np.count_nonzero(delta != limited_delta))
         self.last_qpos = np.clip(self.last_qpos + limited_delta, self.lower, self.upper).astype(np.float32)

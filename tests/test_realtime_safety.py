@@ -11,15 +11,15 @@ def test_safety_controller_ramps_rate_limits_and_clamps():
         upper=np.array([1.0, 1.0]),
         initial_qpos=np.array([0.0, 0.0]),
         ramp_frames=2,
-        max_joint_step=0.6,
+        max_joint_speed=100.0,
         watchdog_s=0.2,
     )
-    first = controller.accept(np.array([4.0, -4.0]), now_s=0.0)
-    second = controller.accept(np.array([4.0, -4.0]), now_s=0.01)
+    first = controller.accept(np.array([4.0, -4.0]), now_s=0.0, recv_ts_s=0.0)
+    second = controller.accept(np.array([4.0, -4.0]), now_s=0.01, recv_ts_s=0.01)
 
-    np.testing.assert_allclose(first, [0.5, -0.5])
-    np.testing.assert_allclose(second, [1.0, -1.0])
-    assert controller.counters.rate_limited == 0
+    np.testing.assert_allclose(first, [0.0, 0.0])
+    np.testing.assert_allclose(second, [0.2, -0.2])
+    assert controller.counters.rate_limited == 4
 
 
 def test_safety_controller_holds_nonfinite_and_watchdog_then_reramps():
@@ -27,12 +27,12 @@ def test_safety_controller_holds_nonfinite_and_watchdog_then_reramps():
 
     controller = RealtimeSafetyController(
         lower=np.array([-1.0]), upper=np.array([1.0]), initial_qpos=np.array([0.0]),
-        ramp_frames=2, max_joint_step=1.0, watchdog_s=0.2,
+        ramp_frames=2, max_joint_speed=1.0, watchdog_s=0.2,
     )
-    controller.accept(np.array([1.0]), now_s=0.0)
-    held_nan = controller.accept(np.array([np.nan]), now_s=0.01)
+    controller.accept(np.array([1.0]), now_s=0.0, recv_ts_s=0.0, bypass_rate_limit=True)
+    held_nan = controller.accept(np.array([np.nan]), now_s=0.01, recv_ts_s=0.01)
     held_timeout = controller.watchdog(now_s=0.21)
-    resumed = controller.accept(np.array([-1.0]), now_s=0.22)
+    resumed = controller.accept(np.array([-1.0]), now_s=0.22, recv_ts_s=0.22, bypass_rate_limit=True)
 
     np.testing.assert_allclose(held_nan, [0.5])
     np.testing.assert_allclose(held_timeout, [0.5])
@@ -46,11 +46,11 @@ def test_safety_controller_estop_holds_and_qpos_scale_one_still_clamps():
 
     controller = RealtimeSafetyController(
         lower=np.array([-1.0]), upper=np.array([1.0]), initial_qpos=np.array([0.0]),
-        ramp_frames=1, max_joint_step=2.0, watchdog_s=0.2,
+        ramp_frames=1, max_joint_speed=1.0, watchdog_s=0.2,
     )
-    controller.accept(np.array([0.4]), now_s=0.0)
+    controller.accept(np.array([0.4]), now_s=0.0, recv_ts_s=0.0, bypass_rate_limit=True)
     controller.set_estop(True)
-    held = controller.accept(np.array([-1.0]), now_s=0.01)
+    held = controller.accept(np.array([-1.0]), now_s=0.01, recv_ts_s=0.01, bypass_rate_limit=True)
 
     np.testing.assert_allclose(held, [0.4])
     assert controller.counters.estop == 1
@@ -136,7 +136,7 @@ def test_safety_bypass_rate_limit_keeps_hard_clamp_and_ramp():
 
     controller = RealtimeSafetyController(
         lower=np.array([-1.0]), upper=np.array([1.0]), initial_qpos=np.array([0.0]),
-        ramp_frames=2, max_joint_step=0.05, watchdog_s=0.2,
+        ramp_frames=2, max_joint_speed=1.0, watchdog_s=0.2,
     )
     first = controller.accept(np.array([3.0]), now_s=0.0, bypass_rate_limit=True)
     second = controller.accept(np.array([3.0]), now_s=0.01, bypass_rate_limit=True)
@@ -144,3 +144,28 @@ def test_safety_bypass_rate_limit_keeps_hard_clamp_and_ramp():
     np.testing.assert_allclose(first, [0.5])
     np.testing.assert_allclose(second, [1.0])
     assert controller.counters.rate_limited == 0
+
+
+def test_safety_controller_limits_by_receive_dt_with_stall_and_step_caps():
+    from geort.mocap.realtime_runtime import RealtimeSafetyController
+
+    controller = RealtimeSafetyController(
+        lower=np.array([-1.0]), upper=np.array([1.0]), initial_qpos=np.array([0.0]),
+        ramp_frames=1, max_joint_speed=2.0, watchdog_s=0.2,
+    )
+
+    first = controller.accept(np.array([1.0]), now_s=10.0, recv_ts_s=1.0)
+    short_dt = controller.accept(np.array([1.0]), now_s=10.1, recv_ts_s=1.01)
+    stalled = controller.accept(np.array([1.0]), now_s=11.0, recv_ts_s=2.0)
+
+    np.testing.assert_allclose(first, [0.0])
+    np.testing.assert_allclose(short_dt, [0.02])
+    np.testing.assert_allclose(stalled, [0.12])
+
+    cap = RealtimeSafetyController(
+        lower=np.array([-1.0]), upper=np.array([1.0]), initial_qpos=np.array([0.0]),
+        ramp_frames=1, max_joint_speed=100.0, watchdog_s=0.2,
+    )
+    cap.accept(np.array([1.0]), now_s=10.0, recv_ts_s=1.0)
+    absolute_cap = cap.accept(np.array([1.0]), now_s=10.1, recv_ts_s=1.05)
+    np.testing.assert_allclose(absolute_cap, [0.2])
