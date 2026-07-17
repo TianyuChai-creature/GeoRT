@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 
 
@@ -77,3 +79,33 @@ def test_session_recorder_writes_required_arrays_and_summary(tmp_path):
     with np.load(path / "frames.npz") as frames:
         assert set(("raw_points", "normalized_tips", "mapped_qpos", "refined_qpos", "output_qpos")) <= set(frames.files)
     assert '\"nan_input\": 1' in (path / "summary.json").read_text()
+
+
+def test_session_recorder_writes_frozen_frame_and_provenance_summary(tmp_path):
+    from geort.mocap.realtime_runtime import RealtimeCounters, SessionRecorder
+
+    recorder = SessionRecorder(tmp_path)
+    recorder.freeze_frame(
+        timestamp_s=2.0,
+        raw_points=np.full((21, 3), 2.0),
+        normalized_tips=np.full((5, 3), 3.0),
+        mapped_qpos=np.full(20, 4.0),
+        output_qpos=np.full(20, 5.0),
+    )
+    path = recorder.close(
+        counters=RealtimeCounters(),
+        extra_summary={
+            "smoothing_alpha": None,
+            "checkpoint_sha256": "expected-sha",
+            "git_hash": "expected-git",
+            "command": "python -m geort.mocap.hts_realtime_inference",
+        },
+    )
+
+    with np.load(path / "frozen_frames.npz") as frozen:
+        np.testing.assert_allclose(frozen["raw_points"], np.full((1, 21, 3), 2.0))
+        np.testing.assert_allclose(frozen["output_qpos"], np.full((1, 20), 5.0))
+    summary = json.loads((path / "summary.json").read_text())
+    assert summary["smoothing_alpha"] is None
+    assert summary["checkpoint_sha256"] == "expected-sha"
+    assert summary["git_hash"] == "expected-git"

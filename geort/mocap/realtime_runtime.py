@@ -131,6 +131,25 @@ class SessionRecorder:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.path = Path(root) / stamp
         self._frames: list[dict[str, Any]] = []
+        self._frozen_frames: list[dict[str, Any]] = []
+
+    def freeze_frame(
+        self,
+        *,
+        timestamp_s: float,
+        raw_points: np.ndarray,
+        normalized_tips: np.ndarray | None,
+        mapped_qpos: np.ndarray,
+        output_qpos: np.ndarray,
+    ) -> None:
+        """Store an operator-requested frozen realtime frame for offline inspection."""
+        self._frozen_frames.append({
+            "timestamp_s": float(timestamp_s),
+            "raw_points": np.asarray(raw_points, dtype=np.float32),
+            "normalized_tips": None if normalized_tips is None else np.asarray(normalized_tips, dtype=np.float32),
+            "mapped_qpos": np.asarray(mapped_qpos, dtype=np.float32),
+            "output_qpos": np.asarray(output_qpos, dtype=np.float32),
+        })
 
     def append(
         self,
@@ -182,6 +201,20 @@ class SessionRecorder:
             contact_json=np.asarray([json.dumps(frame["contact"], sort_keys=True) for frame in self._frames]),
             **{f"timing_{key}_ms": np.asarray([frame["timings_ms"].get(key, np.nan) for frame in self._frames], dtype=np.float64) for key in timing_keys},
         )
+        if self._frozen_frames:
+            def frozen_stack(name: str) -> np.ndarray:
+                values = [frame[name] for frame in self._frozen_frames]
+                if any(value is None for value in values):
+                    return np.asarray(values, dtype=object)
+                return np.stack(values)
+            np.savez_compressed(
+                self.path / "frozen_frames.npz",
+                timestamp_s=np.asarray([frame["timestamp_s"] for frame in self._frozen_frames], dtype=np.float64),
+                raw_points=frozen_stack("raw_points"),
+                normalized_tips=frozen_stack("normalized_tips"),
+                mapped_qpos=frozen_stack("mapped_qpos"),
+                output_qpos=frozen_stack("output_qpos"),
+            )
         summary: dict[str, Any] = {
             "frames": len(self._frames),
             "counters": asdict(counters),

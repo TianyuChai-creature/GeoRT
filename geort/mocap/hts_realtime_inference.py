@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import queue
+import shlex
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterable
@@ -22,6 +25,26 @@ from geort.utils.config_utils import parse_config_keypoint_info
 
 
 PINCH_FINGERS = ("index", "middle", "ring", "pinky")
+DEFAULT_C2B_S42_CHECKPOINT = "checkpoint/custom_right_2026-07-17_12-21-39_c2b_s42"
+C2B_S42_LAST_PTH_SHA256 = "dc9c2cc36e20bffe28736ec6111b4401631ee683c6021afe7c816768a4743e73"
+
+
+def require_c2b_s42_sha(actual_sha256: str) -> str:
+    """Reject a realtime startup whose checkpoint is not the audited C2b seed-42 weights."""
+    if actual_sha256 != C2B_S42_LAST_PTH_SHA256:
+        raise ValueError(
+            "C2b seed-42 checkpoint SHA256 mismatch: "
+            f"{actual_sha256} != {C2B_S42_LAST_PTH_SHA256}"
+        )
+    return actual_sha256
+
+
+def _runtime_git_hash() -> str:
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+
+def _runtime_command() -> str:
+    return shlex.join([sys.executable, *sys.argv])
 
 
 class LatestPointBuffer:
@@ -232,20 +255,26 @@ def run_realtime_viewer_loop(
     safety_controller: RealtimeSafetyController | None = None,
     session_recorder: SessionRecorder | None = None,
     estop_key: str = "space",
+    freeze_key: str = "f",
 ) -> int:
     """Refresh the viewer continuously and consume the newest available HTS frame."""
     processed = 0
     last_points = None
     start_time = time.monotonic()
+    freeze_was_down = False
 
     while True:
         if viewer_env.update() is False:
             return processed
         window = getattr(getattr(viewer_env, "viewer", None), "window", None)
-        if safety_controller is not None and window is not None and hasattr(window, "key_down"):
-            if window.key_down(estop_key):
+        freeze_requested = False
+        if window is not None and hasattr(window, "key_down"):
+            if safety_controller is not None and window.key_down(estop_key):
                 safety_controller.set_estop(True)
                 hand.set_qpos_target(safety_controller.last_qpos)
+            freeze_down = bool(window.key_down(freeze_key))
+            freeze_requested = freeze_down and not freeze_was_down
+            freeze_was_down = freeze_down
 
         raw_points = point_buffer.get_latest()
         if raw_points is None:
@@ -265,7 +294,17 @@ def run_realtime_viewer_loop(
         if safety_controller is not None:
             qpos = safety_controller.accept(qpos, now_s=time.monotonic())
         hand.set_qpos_target(qpos)
-        _record_frame(session_recorder, model, timestamp_s=time.time(), raw_points=points, mapped=mapped_qpos, output=qpos)
+        timestamp_s = time.time()
+        _record_frame(session_recorder, model, timestamp_s=timestamp_s, raw_points=points, mapped=mapped_qpos, output=qpos)
+        if freeze_requested and session_recorder is not None:
+            session_recorder.freeze_frame(
+                timestamp_s=timestamp_s,
+                raw_points=raw_points,
+                normalized_tips=getattr(model, "last_normalized_tips", None),
+                mapped_qpos=getattr(model, "last_mapped_qpos", mapped_qpos),
+                output_qpos=qpos,
+            )
+            print(f"[HTSRealtime] frozen_frame={len(session_recorder._frozen_frames)}")
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
         processed += 1
@@ -362,8 +401,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("-hand", "--hand", default="custom_right", help="GeoRT hand config name.")
     parser.add_argument(
         "--checkpoint", "-ckpt_tag", "--ckpt_tag", dest="checkpoint",
-        default="checkpoint/custom_right_2026-07-16_22-04-19_c2_s42",
-        help="Final-matrix registered checkpoint directory (default: C2 seed 42).",
+        default=DEFAULT_C2B_S42_CHECKPOINT,
+        help="Audited C2b seed-42 checkpoint directory.",
     )
     parser.add_argument("--archive-root", default="outputs/final_matrix", help="Final-matrix provenance archive.")
     parser.add_argument("--session-root", default="outputs/realtime_sessions", help="Directory for one auditable session per run.")
@@ -372,6 +411,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ramp-frames", type=int, default=100, help="Frames used after startup/watchdog recovery.")
     parser.add_argument("--max-joint-step", type=float, default=0.05, help="Per-joint qpos limit in rad/frame.")
     parser.add_argument("--estop-key", default="space", help="SAPIEN viewer key that latches immediate emergency stop.")
+    parser.add_argument("--freeze-key", default="f", help="SAPIEN viewer key that stores the current evidence frame.")
     parser.add_argument(
         "--hand-side",
         choices=("auto", "left", "right"),
@@ -457,6 +497,7 @@ def main() -> None:
         raise ValueError("watchdog, ramp and max joint step must be positive")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)
     provenance = verify_archived_checkpoint(checkpoint, args.archive_root, repo_root=Path.cwd())
+    require_c2b_s42_sha(provenance.last_pth_sha256)
     print(
         "[HTSRealtime] checkpoint="
         f"{checkpoint} sha256={provenance.last_pth_sha256} motion_frame={provenance.motion_frame} "
@@ -524,6 +565,7 @@ def main() -> None:
             safety_controller=safety_controller,
             session_recorder=session_recorder,
             estop_key=args.estop_key,
+            freeze_key=args.freeze_key,
         )
     except KeyboardInterrupt:
         safety_controller.set_estop(True)
@@ -533,7 +575,15 @@ def main() -> None:
     finally:
         session_path = session_recorder.close(
             counters=safety_controller.counters,
-            extra_summary={"checkpoint": str(checkpoint), "stage": args.stage, "motion_frame": provenance.motion_frame},
+            extra_summary={
+                "checkpoint": str(checkpoint.resolve()),
+                "checkpoint_sha256": provenance.last_pth_sha256,
+                "git_hash": _runtime_git_hash(),
+                "command": _runtime_command(),
+                "smoothing_alpha": args.smoothing_alpha,
+                "stage": args.stage,
+                "motion_frame": provenance.motion_frame,
+            },
         )
         print(f"[HTSRealtime] session={session_path}")
 

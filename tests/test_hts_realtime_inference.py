@@ -93,6 +93,8 @@ def test_realtime_qpos_scale_defaults_to_one_for_c2_parity(monkeypatch):
     args = realtime.build_arg_parser().parse_args([])
 
     assert args.qpos_scale == 1.0
+    assert args.checkpoint == "checkpoint/custom_right_2026-07-17_12-21-39_c2b_s42"
+    assert args.freeze_key == "f"
 
 
 def test_realtime_contact_refinement_cli_defaults_are_opt_in(monkeypatch):
@@ -137,3 +139,47 @@ def test_stage_two_and_three_use_sapien_with_fixed_contact_mode(monkeypatch):
     assert realtime.validate_stage_contact_mode("1", "off") == "off"
     assert realtime.validate_stage_contact_mode("2", "off") == "off"
     assert realtime.validate_stage_contact_mode("3", "on") == "on"
+
+
+class FakeFreezeWindow:
+    def key_down(self, key):
+        return key == "f"
+
+
+class FakeFreezeViewerEnv:
+    def __init__(self):
+        self.viewer = type("Viewer", (), {"window": FakeFreezeWindow()})()
+
+    def update(self):
+        return True
+
+
+def test_realtime_freeze_key_writes_current_frame(monkeypatch, tmp_path):
+    from geort.mocap.realtime_runtime import SessionRecorder
+
+    realtime = load_realtime_module(monkeypatch)
+    hand = FakeHand()
+    buffer = realtime.LatestPointBuffer()
+    buffer.put(np.zeros((21, 3), dtype=np.float32))
+    recorder = SessionRecorder(tmp_path)
+
+    processed = realtime.run_realtime_viewer_loop(
+        model=FakeModel(), hand=hand, viewer_env=FakeFreezeViewerEnv(), point_buffer=buffer,
+        max_frames=1, fps_interval=0, session_recorder=recorder, freeze_key="f",
+    )
+    path = recorder.close(counters=realtime.RealtimeSafetyController(
+        lower=np.full(3, -1.0), upper=np.full(3, 1.0), initial_qpos=np.zeros(3),
+    ).counters)
+
+    assert processed == 1
+    with np.load(path / "frozen_frames.npz") as frozen:
+        np.testing.assert_allclose(frozen["raw_points"], np.zeros((1, 21, 3)))
+        np.testing.assert_allclose(frozen["output_qpos"], hand.qpos_targets[-1][None, :])
+
+
+def test_realtime_c2b_sha_guard_rejects_mismatch(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    assert realtime.require_c2b_s42_sha(realtime.C2B_S42_LAST_PTH_SHA256) == realtime.C2B_S42_LAST_PTH_SHA256
+    with np.testing.assert_raises_regex(ValueError, "SHA256"):
+        realtime.require_c2b_s42_sha("different")

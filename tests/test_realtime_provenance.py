@@ -57,3 +57,26 @@ def test_verify_archived_checkpoint_rejects_provenance_mismatch(tmp_path, mutati
 
     with pytest.raises(ValueError, match=expected):
         verify_archived_checkpoint(checkpoint, archive, repo_root=tmp_path)
+
+
+def test_build_ledger_registers_explicit_c2b_checkpoint(tmp_path):
+    from geort.mocap.generate_realtime_checkpoint_ledger import build_ledger
+
+    final_matrix = tmp_path / "final_matrix.json"
+    final_matrix.write_text(json.dumps({"manifest": {"runs": {}}}))
+    checkpoint = tmp_path / "checkpoint" / "c2b_s42"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "last.pth").write_bytes(b"c2b weights")
+    (checkpoint / "training_metadata.json").write_text(json.dumps({
+        "cli_args": {"motion_frame": "global"},
+        "anchor": {"enabled": True, "count": 750, "path": "data/anchors.npz"},
+    }))
+
+    ledger = build_ledger(
+        final_matrix,
+        tmp_path,
+        extra_checkpoints={"c2b_s42": checkpoint},
+    )
+
+    assert ledger["runs"]["c2b_s42"]["checkpoint"] == "checkpoint/c2b_s42"
+    assert ledger["runs"]["c2b_s42"]["last_pth_sha256"] == hashlib.sha256(b"c2b weights").hexdigest()
