@@ -296,3 +296,31 @@ def test_realtime_render_hz_defaults_to_thirty(monkeypatch):
     realtime = load_realtime_module(monkeypatch)
 
     assert realtime.build_arg_parser().parse_args([]).render_hz == 30.0
+
+
+def test_mapping_loop_publishes_each_safe_output_without_viewer(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    class CommandHand(FakeHand):
+        def __init__(self):
+            super().__init__()
+            self.published = []
+
+        def set_qpos_target(self, qpos):
+            self.published.append(np.asarray(qpos, dtype=np.float32))
+
+    buffer = realtime.LatestPointBuffer(preserve_order=True)
+    for _ in range(2):
+        buffer.put(np.zeros((21, 3), dtype=np.float32))
+    records = []
+    hand = CommandHand()
+
+    processed = realtime.run_realtime_viewer_loop(
+        model=FakeModel(), hand=hand, viewer_env=FakeViewerEnv(), point_buffer=buffer,
+        max_frames=2, fps_interval=0, render_hz=0.0, accepted_frame_callback=records.append,
+    )
+
+    assert processed == 2
+    assert len(hand.published) == 2
+    assert len(records) == 2
+    assert all("output" in record and "timepoints_s" in record for record in records)

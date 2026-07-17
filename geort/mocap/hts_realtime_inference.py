@@ -123,6 +123,107 @@ class LatestPointBuffer:
                 return latest
 
 
+
+class RenderMailbox:
+    """Thread-safe bridge from mapping/safety to the SAPIEN owner thread."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest_qpos: np.ndarray | None = None
+        self._records: queue.Queue[dict] = queue.Queue()
+
+    def publish_qpos(self, qpos: np.ndarray) -> None:
+        with self._lock:
+            self._latest_qpos = np.asarray(qpos, dtype=np.float32).copy()
+
+    def publish(self, frame: dict) -> None:
+        self.publish_qpos(frame["output"])
+        self._records.put_nowait(frame["record_payload"])
+
+    def has_records(self) -> bool:
+        return not self._records.empty()
+
+    def take_latest_qpos(self) -> np.ndarray | None:
+        with self._lock:
+            if self._latest_qpos is None:
+                return None
+            qpos = self._latest_qpos.copy()
+            self._latest_qpos = None
+            return qpos
+
+    def drain_records(self) -> list[dict]:
+        records = []
+        while True:
+            try:
+                records.append(self._records.get_nowait())
+            except queue.Empty:
+                return records
+
+
+class RenderCommandHand:
+    """Mapping-thread hand facade; it never touches a SAPIEN articulation."""
+
+    def __init__(self, lower: np.ndarray, upper: np.ndarray, mailbox: RenderMailbox) -> None:
+        self._lower = np.asarray(lower, dtype=np.float32).copy()
+        self._upper = np.asarray(upper, dtype=np.float32).copy()
+        self._mailbox = mailbox
+
+    def get_joint_limit(self):
+        return self._lower.copy(), self._upper.copy()
+
+    def set_qpos_target(self, qpos: np.ndarray) -> None:
+        self._mailbox.publish_qpos(qpos)
+
+
+def run_render_owner_loop(
+    *,
+    hand,
+    viewer_env,
+    mailbox: RenderMailbox,
+    session_recorder: SessionRecorder,
+    worker: threading.Thread,
+    render_hz: float,
+    safety_controller: RealtimeSafetyController,
+    estop_key: str,
+    freeze_key: str,
+) -> None:
+    """Own SAPIEN rendering while the mapping worker consumes input independently."""
+    period_s = 0.0 if render_hz == 0.0 else 1.0 / render_hz
+    next_render_s = time.monotonic()
+    freeze_was_down = False
+    last_payload = None
+    while worker.is_alive() or mailbox.has_records():
+        now_s = time.monotonic()
+        if period_s > 0.0 and now_s < next_render_s:
+            time.sleep(min(next_render_s - now_s, 0.002))
+            continue
+        qpos = mailbox.take_latest_qpos()
+        if qpos is not None:
+            hand.set_qpos_target(qpos)
+        if viewer_env.update() is False:
+            break
+        rendered_s = time.monotonic()
+        next_render_s = rendered_s + period_s
+        window = getattr(getattr(viewer_env, "viewer", None), "window", None)
+        if window is not None and hasattr(window, "key_down"):
+            if window.key_down(estop_key):
+                safety_controller.set_estop(True)
+                hand.set_qpos_target(safety_controller.last_qpos)
+            freeze_down = bool(window.key_down(freeze_key))
+            if freeze_down and not freeze_was_down and last_payload is not None:
+                session_recorder.freeze_frame(
+                    timestamp_s=last_payload["timestamp_s"], raw_points=last_payload["raw_points"],
+                    normalized_tips=last_payload["normalized_tips"], mapped_qpos=last_payload["mapped_qpos"],
+                    output_qpos=last_payload["output_qpos"],
+                )
+                print(f"[HTSRealtime] frozen_frame={len(session_recorder._frozen_frames)}")
+            freeze_was_down = freeze_down
+        for payload in mailbox.drain_records():
+            payload["timepoints_s"]["t_render"] = rendered_s
+            session_recorder.append(**payload)
+            last_payload = payload
+
+
 def start_point_receiver(
     points_iter: Iterable[np.ndarray],
     point_buffer: LatestPointBuffer,
@@ -206,10 +307,8 @@ def map_realtime_frame(model, raw_points: np.ndarray) -> tuple[np.ndarray, np.nd
     return points, model.forward(points)
 
 
-def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output, timepoints_s=None, sender_ts_ns=None):
-    """Record diagnostics exported by the same model API used by evaluation."""
-    if recorder is None:
-        return
+def _frame_record_payload(model, *, timestamp_s, raw_points, mapped, output, timepoints_s=None, sender_ts_ns=None):
+    """Snapshot one mapped frame before it crosses the render-thread boundary."""
     normalized = getattr(model, "last_normalized_tips", None)
     mapped_qpos = getattr(model, "last_mapped_qpos", mapped)
     refined_qpos = getattr(model, "last_refined_qpos", mapped)
@@ -222,12 +321,27 @@ def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output, t
         "weight": 0.0 if selection is None else float(selection.weight),
         "ignored_pairs": [] if selection is None else list(selection.ignored_pair_names),
     }
-    recorder.append(
-        timestamp_s=timestamp_s, raw_points=raw_points, normalized_tips=normalized,
-        mapped_qpos=mapped_qpos, refined_qpos=refined_qpos, output_qpos=output,
-        timings_ms=timings, contact=contact,
-        timepoints_s=timepoints_s, sender_ts_ns=sender_ts_ns,
-    )
+    return {
+        "timestamp_s": timestamp_s,
+        "raw_points": raw_points,
+        "normalized_tips": normalized,
+        "mapped_qpos": mapped_qpos,
+        "refined_qpos": refined_qpos,
+        "output_qpos": output,
+        "timings_ms": timings,
+        "contact": contact,
+        "timepoints_s": dict(timepoints_s or {}),
+        "sender_ts_ns": sender_ts_ns,
+    }
+
+
+def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output, timepoints_s=None, sender_ts_ns=None):
+    """Record diagnostics exported by the same model API used by evaluation."""
+    if recorder is not None:
+        recorder.append(**_frame_record_payload(
+            model, timestamp_s=timestamp_s, raw_points=raw_points, mapped=mapped, output=output,
+            timepoints_s=timepoints_s, sender_ts_ns=sender_ts_ns,
+        ))
 
 
 class TipContactVisualizer:
@@ -341,6 +455,7 @@ def run_realtime_viewer_loop(
     freeze_key: str = "f",
     diagnostic_rate_limit_bypass: bool = False,
     render_hz: float = 30.0,
+    accepted_frame_callback=None,
 ) -> int:
     """Map every accepted input while rendering only at the requested cadence."""
     if render_hz < 0.0:
@@ -367,7 +482,8 @@ def run_realtime_viewer_loop(
             rendered_s = now_s
         for pending_record in pending_records:
             pending_record["timepoints_s"]["t_render"] = rendered_s
-            _record_frame(session_recorder, model, **pending_record)
+            if session_recorder is not None:
+                session_recorder.append(**pending_record)
         pending_records.clear()
         return True
 
@@ -427,11 +543,18 @@ def run_realtime_viewer_loop(
             print(f"[HTSRealtime] frozen_frame={len(session_recorder._frozen_frames)}")
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
-        pending_records.append({
-            "timestamp_s": timestamp_s, "raw_points": points, "mapped": mapped_qpos, "output": qpos,
-            "timepoints_s": {"t_recv": received.recv_ts_s, "t_start": t_start, "t_map": t_map, "t_out": t_out},
-            "sender_ts_ns": received.sender_ts_ns,
-        })
+        record_payload = _frame_record_payload(
+            model, timestamp_s=timestamp_s, raw_points=points, mapped=mapped_qpos, output=qpos,
+            timepoints_s={"t_recv": received.recv_ts_s, "t_start": t_start, "t_map": t_map, "t_out": t_out},
+            sender_ts_ns=received.sender_ts_ns,
+        )
+        if accepted_frame_callback is not None:
+            accepted_frame_callback({
+                "output": qpos.copy(), "timepoints_s": record_payload["timepoints_s"],
+                "record_payload": record_payload,
+            })
+        else:
+            pending_records.append(record_payload)
         processed += 1
         if fps_interval > 0 and processed % fps_interval == 0:
             elapsed = max(time.monotonic() - start_time, 1e-6)
@@ -701,30 +824,46 @@ def main() -> None:
 
     print("[HTSRealtime] Press Ctrl-C or close the viewer to stop.")
 
-    try:
-        processed = run_realtime_viewer_loop(
+    mailbox = RenderMailbox()
+    command_hand = RenderCommandHand(lower, upper, mailbox)
+    worker_result = {"processed": 0}
+
+    def map_in_background() -> None:
+        worker_result["processed"] = run_realtime_viewer_loop(
             model=model,
-            hand=hand,
-            viewer_env=viewer_env,
+            hand=command_hand,
+            viewer_env=HeadlessViewerEnv(),
             point_buffer=point_buffer,
             max_frames=args.max_frames,
             max_duration_s=args.max_duration_s,
             smoothing_alpha=args.smoothing_alpha,
             fps_interval=args.fps_interval,
-            contact_visualizer=contact_visualizer,
+            contact_visualizer=None,
             qpos_scale=args.qpos_scale,
             safety_controller=safety_controller,
-            session_recorder=session_recorder,
+            session_recorder=None,
             estop_key=args.estop_key,
             freeze_key=args.freeze_key,
             diagnostic_rate_limit_bypass=args.diagnostic_rate_limit_bypass,
-            render_hz=args.render_hz,
+            render_hz=0.0,
+            accepted_frame_callback=mailbox.publish,
         )
+
+    worker = threading.Thread(target=map_in_background, name="geort-map-safety", daemon=True)
+    worker.start()
+    try:
+        run_render_owner_loop(
+            hand=hand, viewer_env=viewer_env, mailbox=mailbox, session_recorder=session_recorder,
+            worker=worker, render_hz=args.render_hz, safety_controller=safety_controller,
+            estop_key=args.estop_key, freeze_key=args.freeze_key,
+        )
+        worker.join(timeout=1.0)
     except KeyboardInterrupt:
         safety_controller.set_estop(True)
+        hand.set_qpos_target(safety_controller.last_qpos)
         print("\n[HTSRealtime] Stopped by user; emergency stop latched.")
     else:
-        print(f"[HTSRealtime] Stopped after {processed} processed frames.")
+        print(f"[HTSRealtime] Stopped after {worker_result['processed']} processed frames.")
     finally:
         session_path = session_recorder.close(
             counters=safety_controller.counters,
