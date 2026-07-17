@@ -6,6 +6,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 
 from geort.anchor.mining import LEVEL_FRACTIONS, robust_angle_targets, select_level_medoids
+from geort.anchor.arc_bending_v2_robust import orient_projection_to_beta1
 
 
 def fast_medoid_order(
@@ -36,6 +37,7 @@ def select_robust_arc_medoids_fast(
     descriptors: np.ndarray,
     source_indices: np.ndarray,
     *,
+    beta1: np.ndarray,
     manifold_bins: int = 64,
     min_support: int = 5,
     max_candidates: int = 256,
@@ -46,10 +48,14 @@ def select_robust_arc_medoids_fast(
     points = np.asarray(tip_points, dtype=np.float64)
     descriptors = np.asarray(descriptors, dtype=np.float64)
     sources = np.asarray(source_indices, dtype=np.int64)
+    beta1_values = np.asarray(beta1, dtype=np.float64)
+    if beta1_values.shape != (points.shape[0],) or not np.all(np.isfinite(beta1_values)):
+        raise ValueError("beta1 must be finite [N]")
     centered = points - points.mean(axis=0, keepdims=True)
     _, singular, vectors = np.linalg.svd(centered, full_matrices=False)
     variance = np.square(singular)
     projection = centered @ vectors[0]
+    projection, direction_flipped = orient_projection_to_beta1(projection, beta1_values)
     clipped = robust_angle_targets(projection, (0.02, 0.98))
     lower, upper = clipped.endpoints
     retained = np.flatnonzero((projection >= lower) & (projection <= upper))
@@ -80,6 +86,8 @@ def select_robust_arc_medoids_fast(
         "explained_variance": float(variance[0] / variance.sum()),
         "populated_bin_count": int(reps.size),
         "domain_clip": "projection_quantiles_0.02_0.98",
+        "pc1_direction_reference": "beta1_increasing",
+        "pc1_direction_flipped": bool(direction_flipped),
         "endpoint_projection": clipped.endpoints.astype(float).tolist(),
         "selection": selection.to_metadata(),
     }

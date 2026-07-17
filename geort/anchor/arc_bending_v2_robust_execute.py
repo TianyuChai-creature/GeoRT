@@ -35,7 +35,10 @@ def rebuild_human(raw: np.ndarray, legacy_path: Path) -> tuple[dict[str, np.ndar
         valid = palm_valid & angles.valid[:, index] & np.all(np.isfinite(aligned[:, landmarks]), axis=(1, 2))
         sources = np.flatnonzero(valid)
         hand = aligned[sources][:, landmarks]
-        result = select_robust_arc_medoids(hand[:, -1], hand.reshape(sources.size, -1), sources)
+        result = select_robust_arc_medoids(
+            hand[:, -1], hand.reshape(sources.size, -1), sources,
+            beta1=angles.beta[sources, index, 0],
+        )
         start, selected = _group_start(index, "bending"), result["source_indices"]
         rows = slice(start, start + 5)
         values["human_frames"][rows] = raw[selected]

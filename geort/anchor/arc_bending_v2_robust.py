@@ -12,11 +12,27 @@ from geort.anchor.mining import (
 )
 
 
+def orient_projection_to_beta1(
+    projection: np.ndarray,
+    beta1: np.ndarray,
+) -> tuple[np.ndarray, bool]:
+    """Orient a PC1 coordinate so increasing values follow increasing beta1."""
+    values = np.asarray(projection, dtype=np.float64)
+    reference = np.asarray(beta1, dtype=np.float64)
+    if values.ndim != 1 or reference.shape != values.shape:
+        raise ValueError("projection and beta1 must be matching [N] arrays")
+    correlation = float(np.dot(values - values.mean(), reference - reference.mean()))
+    if correlation < 0.0:
+        return -values, True
+    return values, False
+
+
 def select_robust_arc_medoids(
     tip_points: np.ndarray,
     descriptors: np.ndarray,
     source_indices: np.ndarray,
     *,
+    beta1: np.ndarray,
     manifold_bins: int = 64,
     min_support: int = 5,
     max_candidates: int = 256,
@@ -32,17 +48,21 @@ def select_robust_arc_medoids(
     points = np.asarray(tip_points, dtype=np.float64)
     descriptors = np.asarray(descriptors, dtype=np.float64)
     sources = np.asarray(source_indices, dtype=np.int64)
+    beta1_values = np.asarray(beta1, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] < 5:
         raise ValueError("tip_points must have shape [N>=5, 3]")
     if descriptors.ndim != 2 or descriptors.shape[0] != points.shape[0]:
         raise ValueError("descriptors must have matching shape [N, D]")
     if sources.shape != (points.shape[0],) or np.unique(sources).size != sources.size:
         raise ValueError("source_indices must be unique [N]")
+    if beta1_values.shape != (points.shape[0],) or not np.all(np.isfinite(beta1_values)):
+        raise ValueError("beta1 must be finite [N]")
     centered = points - points.mean(axis=0, keepdims=True)
     _, singular, vectors = np.linalg.svd(centered, full_matrices=False)
     variance = np.square(singular)
     explained = float(variance[0] / variance.sum())
     projection = centered @ vectors[0]
+    projection, direction_flipped = orient_projection_to_beta1(projection, beta1_values)
     clipped = robust_angle_targets(projection, (0.02, 0.98))
     lower, upper = clipped.endpoints
     retained = np.flatnonzero((projection >= lower) & (projection <= upper))
@@ -77,6 +97,8 @@ def select_robust_arc_medoids(
         "explained_variance": explained,
         "populated_bin_count": int(reps.size),
         "domain_clip": "projection_quantiles_0.02_0.98",
+        "pc1_direction_reference": "beta1_increasing",
+        "pc1_direction_flipped": bool(direction_flipped),
         "endpoint_projection": clipped.endpoints.astype(float).tolist(),
         "selection": selection.to_metadata(),
     }
