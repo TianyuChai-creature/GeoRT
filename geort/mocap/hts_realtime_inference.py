@@ -762,7 +762,8 @@ def main() -> None:
         raise ValueError("--max-joint-speed is required unless --diagnostic-rate-limit-bypass is set")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)
     provenance = verify_archived_checkpoint(checkpoint, args.archive_root, repo_root=Path.cwd())
-    require_c2b_s42_sha(provenance.last_pth_sha256)
+    if checkpoint.resolve() == (Path.cwd() / DEFAULT_C2B_S42_CHECKPOINT).resolve():
+        require_c2b_s42_sha(provenance.last_pth_sha256)
     print(
         "[HTSRealtime] checkpoint="
         f"{checkpoint} sha256={provenance.last_pth_sha256} motion_frame={provenance.motion_frame} "
