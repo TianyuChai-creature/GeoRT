@@ -183,3 +183,24 @@ def test_realtime_c2b_sha_guard_rejects_mismatch(monkeypatch):
     assert realtime.require_c2b_s42_sha(realtime.C2B_S42_LAST_PTH_SHA256) == realtime.C2B_S42_LAST_PTH_SHA256
     with np.testing.assert_raises_regex(ValueError, "SHA256"):
         realtime.require_c2b_s42_sha("different")
+
+
+def test_realtime_latency_diagnostic_cli_defaults(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    args = realtime.build_arg_parser().parse_args([])
+
+    assert args.render_mode == "inline"
+    assert args.diagnostic_rate_limit_bypass is False
+
+
+def test_latest_point_buffer_preserves_receive_timestamps(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+    buffer = realtime.LatestPointBuffer()
+    buffer.put(np.zeros((21, 3), dtype=np.float32), recv_ts_s=12.5, sender_ts_ns=99)
+
+    frame = buffer.get_latest()
+
+    assert frame.recv_ts_s == 12.5
+    assert frame.sender_ts_ns == 99
+    np.testing.assert_allclose(frame.points, np.zeros((21, 3), dtype=np.float32))

@@ -109,3 +109,38 @@ def test_session_recorder_writes_frozen_frame_and_provenance_summary(tmp_path):
     assert summary["smoothing_alpha"] is None
     assert summary["checkpoint_sha256"] == "expected-sha"
     assert summary["git_hash"] == "expected-git"
+
+
+def test_session_recorder_writes_five_latency_timestamps(tmp_path):
+    from geort.mocap.realtime_runtime import RealtimeCounters, SessionRecorder
+
+    recorder = SessionRecorder(tmp_path)
+    recorder.append(
+        timestamp_s=5.0,
+        raw_points=np.zeros((21, 3)), normalized_tips=np.zeros((5, 3)),
+        mapped_qpos=np.zeros(2), refined_qpos=np.zeros(2), output_qpos=np.zeros(2),
+        timings_ms={}, contact={},
+        timepoints_s={"t_recv": 1.0, "t_start": 1.1, "t_map": 1.2, "t_out": 1.3, "t_render": 1.4},
+        sender_ts_ns=123456789,
+    )
+    path = recorder.close(counters=RealtimeCounters())
+
+    with np.load(path / "frames.npz") as frames:
+        np.testing.assert_allclose(frames["t_recv_s"], [1.0])
+        np.testing.assert_allclose(frames["t_render_s"], [1.4])
+        np.testing.assert_array_equal(frames["sender_ts_ns"], [123456789])
+
+
+def test_safety_bypass_rate_limit_keeps_hard_clamp_and_ramp():
+    from geort.mocap.realtime_runtime import RealtimeSafetyController
+
+    controller = RealtimeSafetyController(
+        lower=np.array([-1.0]), upper=np.array([1.0]), initial_qpos=np.array([0.0]),
+        ramp_frames=2, max_joint_step=0.05, watchdog_s=0.2,
+    )
+    first = controller.accept(np.array([3.0]), now_s=0.0, bypass_rate_limit=True)
+    second = controller.accept(np.array([3.0]), now_s=0.01, bypass_rate_limit=True)
+
+    np.testing.assert_allclose(first, [0.5])
+    np.testing.assert_allclose(second, [1.0])
+    assert controller.counters.rate_limited == 0

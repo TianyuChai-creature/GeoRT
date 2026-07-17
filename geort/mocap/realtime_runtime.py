@@ -95,7 +95,7 @@ class RealtimeSafetyController:
             self._start_ramp()
         return self.last_qpos.copy()
 
-    def accept(self, qpos: np.ndarray, *, now_s: float) -> np.ndarray:
+    def accept(self, qpos: np.ndarray, *, now_s: float, bypass_rate_limit: bool = False) -> np.ndarray:
         """Return the safe target for one candidate qpos at monotonic time ``now_s``."""
         candidate = np.asarray(qpos, dtype=np.float32)
         if candidate.shape != self.last_qpos.shape:
@@ -117,8 +117,8 @@ class RealtimeSafetyController:
             target = self._ramp_start + alpha * (target - self._ramp_start)
         target = np.clip(target, self.lower, self.upper)
         delta = target - self.last_qpos
-        limited_delta = np.clip(delta, -self.max_joint_step, self.max_joint_step)
-        if not np.array_equal(delta, limited_delta):
+        limited_delta = delta if bypass_rate_limit else np.clip(delta, -self.max_joint_step, self.max_joint_step)
+        if not bypass_rate_limit and not np.array_equal(delta, limited_delta):
             self.counters.rate_limited += int(np.count_nonzero(delta != limited_delta))
         self.last_qpos = np.clip(self.last_qpos + limited_delta, self.lower, self.upper).astype(np.float32)
         return self.last_qpos.copy()
@@ -162,6 +162,8 @@ class SessionRecorder:
         output_qpos: np.ndarray,
         timings_ms: dict[str, float],
         contact: dict[str, Any] | None,
+        timepoints_s: dict[str, float] | None = None,
+        sender_ts_ns: int | None = None,
     ) -> None:
         self._frames.append({
             "timestamp_s": float(timestamp_s),
@@ -172,6 +174,8 @@ class SessionRecorder:
             "output_qpos": np.asarray(output_qpos, dtype=np.float32),
             "timings_ms": {key: float(value) for key, value in timings_ms.items()},
             "contact": contact or {},
+            "timepoints_s": {key: float(value) for key, value in (timepoints_s or {}).items()},
+            "sender_ts_ns": None if sender_ts_ns is None else int(sender_ts_ns),
         })
 
     @staticmethod
@@ -199,6 +203,12 @@ class SessionRecorder:
             refined_qpos=stack("refined_qpos"),
             output_qpos=stack("output_qpos"),
             contact_json=np.asarray([json.dumps(frame["contact"], sort_keys=True) for frame in self._frames]),
+            t_recv_s=np.asarray([frame["timepoints_s"].get("t_recv", np.nan) for frame in self._frames], dtype=np.float64),
+            t_start_s=np.asarray([frame["timepoints_s"].get("t_start", np.nan) for frame in self._frames], dtype=np.float64),
+            t_map_s=np.asarray([frame["timepoints_s"].get("t_map", np.nan) for frame in self._frames], dtype=np.float64),
+            t_out_s=np.asarray([frame["timepoints_s"].get("t_out", np.nan) for frame in self._frames], dtype=np.float64),
+            t_render_s=np.asarray([frame["timepoints_s"].get("t_render", np.nan) for frame in self._frames], dtype=np.float64),
+            sender_ts_ns=np.asarray([-1 if frame["sender_ts_ns"] is None else frame["sender_ts_ns"] for frame in self._frames], dtype=np.int64),
             **{f"timing_{key}_ms": np.asarray([frame["timings_ms"].get(key, np.nan) for frame in self._frames], dtype=np.float64) for key in timing_keys},
         )
         if self._frozen_frames:

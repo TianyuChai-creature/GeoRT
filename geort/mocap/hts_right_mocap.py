@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Literal
 
@@ -14,6 +15,15 @@ from geort.utils.path import get_data_root
 
 EXPECTED_HTS_LANDMARKS = 21
 HandSideName = Literal["left", "right"]
+
+
+@dataclass(frozen=True)
+class TimedHTSPoints:
+    """GeoRT points plus SDK receive/source timestamps for realtime latency traces."""
+
+    points: np.ndarray
+    recv_ts_ns: int
+    source_ts_ns: int | None
 
 
 def normalize_hand_side(hand_side: str) -> HandSideName:
@@ -92,8 +102,9 @@ def iter_hts_points(
     host: str,
     port: int,
     timeout_s: float,
+    include_timestamps: bool = False,
 ):
-    """Yield GeoRT-ready points from selected-hand HTS frame events."""
+    """Yield selected-hand points, optionally preserving SDK frame timestamps."""
     from hand_tracking_sdk import (
         ErrorPolicy,
         HTSClient,
@@ -126,7 +137,15 @@ def iter_hts_points(
             continue
         if event.side != expected_side:
             continue
-        yield frame_to_geort_points(event)
+        points = frame_to_geort_points(event)
+        if include_timestamps:
+            yield TimedHTSPoints(
+                points=points,
+                recv_ts_ns=int(event.recv_ts_ns),
+                source_ts_ns=None if event.source_ts_ns is None else int(event.source_ts_ns),
+            )
+        else:
+            yield points
 
 
 def iter_right_hts_points(

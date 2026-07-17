@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import queue
+from dataclasses import dataclass
 import shlex
 import subprocess
 import sys
@@ -25,6 +26,24 @@ from geort.utils.config_utils import parse_config_keypoint_info
 
 
 PINCH_FINGERS = ("index", "middle", "ring", "pinky")
+
+
+@dataclass(frozen=True)
+class ReceivedPoints:
+    """One latest-only realtime input with a receiver-domain timestamp."""
+
+    points: np.ndarray
+    recv_ts_s: float
+    sender_ts_ns: int | None = None
+
+
+class HeadlessViewerEnv:
+    """Stage-1 diagnostic viewer substitute that leaves mapping and safety unchanged."""
+
+    viewer = None
+
+    def update(self) -> bool:
+        return True
 DEFAULT_C2B_S42_CHECKPOINT = "checkpoint/custom_right_2026-07-17_12-21-39_c2b_s42"
 C2B_S42_LAST_PTH_SHA256 = "dc9c2cc36e20bffe28736ec6111b4401631ee683c6021afe7c816768a4743e73"
 
@@ -48,20 +67,48 @@ def _runtime_command() -> str:
 
 
 class LatestPointBuffer:
-    """Thread-safe single-slot buffer that keeps only the newest HTS frame."""
+    """Thread-safe single-slot buffer that keeps only the newest timestamped HTS frame."""
 
     def __init__(self):
         self._queue = queue.Queue(maxsize=1)
 
-    def put(self, points: np.ndarray) -> None:
+    @staticmethod
+    def _coerce(
+        points: np.ndarray | ReceivedPoints | object,
+        *,
+        recv_ts_s: float | None,
+        sender_ts_ns: int | None,
+    ) -> ReceivedPoints:
+        if isinstance(points, ReceivedPoints):
+            return points
+        if hasattr(points, "points") and hasattr(points, "recv_ts_ns"):
+            return ReceivedPoints(
+                points=np.asarray(points.points, dtype=np.float32),
+                recv_ts_s=float(points.recv_ts_ns) / 1e9,
+                sender_ts_ns=getattr(points, "source_ts_ns", None),
+            )
+        return ReceivedPoints(
+            points=np.asarray(points, dtype=np.float32),
+            recv_ts_s=time.monotonic() if recv_ts_s is None else float(recv_ts_s),
+            sender_ts_ns=sender_ts_ns,
+        )
+
+    def put(
+        self,
+        points: np.ndarray | ReceivedPoints | object,
+        *,
+        recv_ts_s: float | None = None,
+        sender_ts_ns: int | None = None,
+    ) -> None:
+        frame = self._coerce(points, recv_ts_s=recv_ts_s, sender_ts_ns=sender_ts_ns)
         if self._queue.full():
             try:
                 self._queue.get_nowait()
             except queue.Empty:
                 pass
-        self._queue.put_nowait(points)
+        self._queue.put_nowait(frame)
 
-    def get_latest(self) -> np.ndarray | None:
+    def get_latest(self) -> ReceivedPoints | None:
         latest = None
         while True:
             try:
@@ -125,7 +172,7 @@ def map_realtime_frame(model, raw_points: np.ndarray) -> tuple[np.ndarray, np.nd
     return points, model.forward(points)
 
 
-def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output):
+def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output, timepoints_s=None, sender_ts_ns=None):
     """Record diagnostics exported by the same model API used by evaluation."""
     if recorder is None:
         return
@@ -145,6 +192,7 @@ def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output):
         timestamp_s=timestamp_s, raw_points=raw_points, normalized_tips=normalized,
         mapped_qpos=mapped_qpos, refined_qpos=refined_qpos, output_qpos=output,
         timings_ms=timings, contact=contact,
+        timepoints_s=timepoints_s, sender_ts_ns=sender_ts_ns,
     )
 
 
@@ -256,15 +304,28 @@ def run_realtime_viewer_loop(
     session_recorder: SessionRecorder | None = None,
     estop_key: str = "space",
     freeze_key: str = "f",
+    diagnostic_rate_limit_bypass: bool = False,
 ) -> int:
-    """Refresh the viewer continuously and consume the newest available HTS frame."""
+    """Run realtime mapping and persist receive→render timestamps for each accepted frame."""
     processed = 0
     last_points = None
     start_time = time.monotonic()
     freeze_was_down = False
+    pending_record = None
+
+    def render_and_flush() -> bool:
+        nonlocal pending_record
+        if viewer_env.update() is False:
+            return False
+        rendered_s = time.monotonic()
+        if pending_record is not None:
+            pending_record["timepoints_s"]["t_render"] = rendered_s
+            _record_frame(session_recorder, model, **pending_record)
+            pending_record = None
+        return True
 
     while True:
-        if viewer_env.update() is False:
+        if not render_and_flush():
             return processed
         window = getattr(getattr(viewer_env, "viewer", None), "window", None)
         freeze_requested = False
@@ -276,44 +337,49 @@ def run_realtime_viewer_loop(
             freeze_requested = freeze_down and not freeze_was_down
             freeze_was_down = freeze_down
 
-        raw_points = point_buffer.get_latest()
-        if raw_points is None:
+        received = point_buffer.get_latest()
+        if received is None:
             if safety_controller is not None:
                 hand.set_qpos_target(safety_controller.watchdog(now_s=time.monotonic()))
             continue
 
+        t_start = time.monotonic()
+        raw_points = received.points
         points = validate_live_points(raw_points)
         if points is None:
             continue
-
         points = smooth_live_points(points, last_points, smoothing_alpha)
         last_points = points
-
         _, mapped_qpos = map_realtime_frame(model, points)
+        t_map = time.monotonic()
         qpos = scale_and_clamp_qpos(mapped_qpos, hand, qpos_scale)
         if safety_controller is not None:
-            qpos = safety_controller.accept(qpos, now_s=time.monotonic())
+            qpos = safety_controller.accept(
+                qpos, now_s=time.monotonic(), bypass_rate_limit=diagnostic_rate_limit_bypass,
+            )
         hand.set_qpos_target(qpos)
+        t_out = time.monotonic()
         timestamp_s = time.time()
-        _record_frame(session_recorder, model, timestamp_s=timestamp_s, raw_points=points, mapped=mapped_qpos, output=qpos)
         if freeze_requested and session_recorder is not None:
             session_recorder.freeze_frame(
-                timestamp_s=timestamp_s,
-                raw_points=raw_points,
+                timestamp_s=timestamp_s, raw_points=raw_points,
                 normalized_tips=getattr(model, "last_normalized_tips", None),
-                mapped_qpos=getattr(model, "last_mapped_qpos", mapped_qpos),
-                output_qpos=qpos,
+                mapped_qpos=getattr(model, "last_mapped_qpos", mapped_qpos), output_qpos=qpos,
             )
             print(f"[HTSRealtime] frozen_frame={len(session_recorder._frozen_frames)}")
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
+        pending_record = {
+            "timestamp_s": timestamp_s, "raw_points": points, "mapped": mapped_qpos, "output": qpos,
+            "timepoints_s": {"t_recv": received.recv_ts_s, "t_start": t_start, "t_map": t_map, "t_out": t_out},
+            "sender_ts_ns": received.sender_ts_ns,
+        }
         processed += 1
-
         if fps_interval > 0 and processed % fps_interval == 0:
             elapsed = max(time.monotonic() - start_time, 1e-6)
             print(f"[HTSRealtime] processed={processed} fps={processed / elapsed:.1f}")
-
         if max_frames is not None and processed >= max_frames:
+            render_and_flush()
             return processed
 
 
@@ -406,6 +472,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--archive-root", default="outputs/final_matrix", help="Final-matrix provenance archive.")
     parser.add_argument("--session-root", default="outputs/realtime_sessions", help="Directory for one auditable session per run.")
+    parser.add_argument("--render-mode", choices=("inline", "headless"), default="inline", help="Inline SAPIEN render or Stage-1 diagnostic headless loop.")
+    parser.add_argument("--diagnostic-rate-limit-bypass", action="store_true", help="Stage-1-only diagnostic: bypass rate limiting while retaining clamp, ramp, watchdog and estop.")
     parser.add_argument("--stage", choices=("1", "2", "3"), default="1", help="1=SAPIEN mirror, 2=robot contact off, 3=robot contact on.")
     parser.add_argument("--watchdog-ms", type=float, default=200.0, help="Freeze after this much input silence.")
     parser.add_argument("--ramp-frames", type=int, default=100, help="Frames used after startup/watchdog recovery.")
@@ -493,6 +561,10 @@ def main() -> None:
     hand_side = infer_hand_side(args.hand, args.hand_side)
 
     validate_stage_contact_mode(args.stage, args.contact_refine)
+    if args.render_mode == "headless" and args.stage != "1":
+        raise ValueError("--render-mode headless is only valid for Stage 1 diagnostics")
+    if args.diagnostic_rate_limit_bypass and args.stage != "1":
+        raise ValueError("--diagnostic-rate-limit-bypass is only valid for Stage 1 diagnostics")
     if args.watchdog_ms <= 0.0 or args.ramp_frames <= 0 or args.max_joint_step <= 0.0:
         raise ValueError("watchdog, ramp and max joint step must be positive")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)
@@ -519,14 +591,14 @@ def main() -> None:
     )
 
     config = get_config(args.hand)
-    hand = HandKinematicModel.build_from_config(config, render=True)
+    hand = HandKinematicModel.build_from_config(config, render=args.render_mode == "inline")
     lower, upper = hand.get_joint_limit()
     safety_controller = RealtimeSafetyController(
         lower=lower, upper=upper, initial_qpos=(np.asarray(lower) + np.asarray(upper)) / 2.0,
         ramp_frames=args.ramp_frames, max_joint_step=args.max_joint_step, watchdog_s=args.watchdog_ms / 1000.0,
     )
     session_recorder = SessionRecorder(args.session_root)
-    viewer_env = hand.get_viewer_env()
+    viewer_env = hand.get_viewer_env() if args.render_mode == "inline" else HeadlessViewerEnv()
     contact_visualizer = None
     if args.contact_visual:
         keypoint_info = parse_config_keypoint_info(config)
@@ -545,6 +617,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         timeout_s=args.timeout_s,
+        include_timestamps=True,
     )
     start_point_receiver(points_iter, point_buffer, hand_side=hand_side)
 
@@ -566,6 +639,7 @@ def main() -> None:
             session_recorder=session_recorder,
             estop_key=args.estop_key,
             freeze_key=args.freeze_key,
+            diagnostic_rate_limit_bypass=args.diagnostic_rate_limit_bypass,
         )
     except KeyboardInterrupt:
         safety_controller.set_estop(True)
@@ -583,6 +657,11 @@ def main() -> None:
                 "smoothing_alpha": args.smoothing_alpha,
                 "stage": args.stage,
                 "motion_frame": provenance.motion_frame,
+                "render_mode": args.render_mode,
+                "diagnostic_rate_limit_bypass": args.diagnostic_rate_limit_bypass,
+                "ramp_frames": args.ramp_frames,
+                "max_joint_step_rad": args.max_joint_step,
+                "watchdog_ms": args.watchdog_ms,
             },
         )
         print(f"[HTSRealtime] session={session_path}")
