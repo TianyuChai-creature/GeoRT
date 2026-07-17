@@ -330,6 +330,7 @@ def run_realtime_viewer_loop(
     viewer_env,
     point_buffer: LatestPointBuffer,
     max_frames: int | None = None,
+    max_duration_s: float | None = None,
     smoothing_alpha: float | None = None,
     fps_interval: int = 60,
     contact_visualizer: TipContactVisualizer | None = None,
@@ -359,6 +360,8 @@ def run_realtime_viewer_loop(
         return True
 
     while True:
+        if max_duration_s is not None and time.monotonic() - start_time >= max_duration_s:
+            return processed
         if not render_and_flush():
             return processed
         window = getattr(getattr(viewer_env, "viewer", None), "window", None)
@@ -535,6 +538,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=9000, help="Bind/connect port for HTS streaming.")
     parser.add_argument("--timeout-s", type=float, default=1.0, help="Socket receive timeout in seconds.")
     parser.add_argument("--max-frames", type=int, default=None, help="Optional frame limit for smoke tests.")
+    parser.add_argument("--max-duration-s", type=float, default=None, help="Optional wall-clock run duration for clean diagnostic capture.")
     parser.add_argument("--replay-session", default=None, help="Recorded session directory; replays raw points at recorded receive cadence.")
     parser.add_argument(
         "--smoothing-alpha",
@@ -608,6 +612,8 @@ def main() -> None:
         raise ValueError("watchdog and ramp must be positive")
     if args.max_joint_speed is not None and args.max_joint_speed <= 0.0:
         raise ValueError("max joint speed must be positive when provided")
+    if args.max_duration_s is not None and args.max_duration_s < 0.0:
+        raise ValueError("max duration must be non-negative when provided")
     if args.max_joint_speed is None and not args.diagnostic_rate_limit_bypass:
         raise ValueError("--max-joint-speed is required unless --diagnostic-rate-limit-bypass is set")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)
@@ -680,6 +686,7 @@ def main() -> None:
             viewer_env=viewer_env,
             point_buffer=point_buffer,
             max_frames=args.max_frames,
+            max_duration_s=args.max_duration_s,
             smoothing_alpha=args.smoothing_alpha,
             fps_interval=args.fps_interval,
             contact_visualizer=contact_visualizer,
@@ -713,6 +720,7 @@ def main() -> None:
                 "max_joint_step_cap_rad": RealtimeSafetyController.MAX_JOINT_STEP_RAD,
                 "rate_dt_cap_ms": RealtimeSafetyController.MAX_RATE_DT_S * 1000.0,
                 "watchdog_ms": args.watchdog_ms,
+                "max_duration_s": args.max_duration_s,
             },
         )
         print(f"[HTSRealtime] session={session_path}")

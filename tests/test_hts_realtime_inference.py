@@ -255,3 +255,13 @@ def test_replay_buffer_preserves_every_recorded_frame(monkeypatch):
     assert buffer.get_latest().recv_ts_s == 1.0
     assert buffer.get_latest().recv_ts_s == 2.0
     assert buffer.get_latest() is None
+
+
+def test_viewer_loop_stops_at_explicit_max_duration(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+    buffer = realtime.LatestPointBuffer()
+    processed = realtime.run_realtime_viewer_loop(
+        model=FakeModel(), hand=FakeHand(), viewer_env=FakeViewerEnv(), point_buffer=buffer,
+        max_duration_s=0.0, fps_interval=0,
+    )
+    assert processed == 0
