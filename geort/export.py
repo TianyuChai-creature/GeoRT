@@ -4,8 +4,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch
+import time
 from pathlib import Path
+
+import numpy as np
+import torch
 from geort.formatter import HandFormatter
 from geort.keypoint_normalization import normalize_finger_points
 from geort.model import IKModel
@@ -108,6 +111,10 @@ class GeoRTRetargetingModel:
         else:
             print("contact_refine=off")
         self.last_contact_refinement = None
+        self.last_normalized_tips = None
+        self.last_mapped_qpos = None
+        self.last_refined_qpos = None
+        self.last_timings_ms = {}
 
         # Report FK backend used during training (if metadata is available).
         metadata_path = Path(model_path).parent / "training_metadata.json"
@@ -129,15 +136,29 @@ class GeoRTRetargetingModel:
     def forward(self, keypoints):
         # keypoints: [N, 3] — raw HTS landmarks in metric hand-base space.
         raw_keypoints = keypoints
+        start = time.perf_counter()
         normalized_tips = _select_and_normalize_tips(
             raw_keypoints, self.human_ids, self.finger_names, self.human_normalization
         )
+        normalized_done = time.perf_counter()
         joint_normalized = self.model.forward(
             torch.from_numpy(normalized_tips).unsqueeze(0).float().cuda()
         )
         joint_raw = self.qpos_normalizer.unnormalize(joint_normalized.detach().cpu().numpy())
         q_map = joint_raw[0]
-        return self._apply_contact_refinement(q_map, raw_keypoints)
+        mapped_done = time.perf_counter()
+        q_out = self._apply_contact_refinement(q_map, raw_keypoints)
+        refined_done = time.perf_counter()
+        self.last_normalized_tips = np.asarray(normalized_tips, dtype=np.float32).copy()
+        self.last_mapped_qpos = np.asarray(q_map, dtype=np.float32).copy()
+        self.last_refined_qpos = np.asarray(q_out, dtype=np.float32).copy()
+        self.last_timings_ms = {
+            "normalization": (normalized_done - start) * 1000.0,
+            "mapping": (mapped_done - normalized_done) * 1000.0,
+            "contact": (refined_done - mapped_done) * 1000.0,
+            "forward": (refined_done - start) * 1000.0,
+        }
+        return q_out
 
 
 def resolve_checkpoint_dir(tag=''):

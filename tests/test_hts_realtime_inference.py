@@ -84,12 +84,12 @@ def test_realtime_inference_scales_and_clamps_qpos_targets(monkeypatch):
     )
 
 
-def test_realtime_qpos_scale_defaults_to_1_05(monkeypatch):
+def test_realtime_qpos_scale_defaults_to_one_for_c2_parity(monkeypatch):
     realtime = load_realtime_module(monkeypatch)
 
     args = realtime.build_arg_parser().parse_args([])
 
-    assert args.qpos_scale == 1.05
+    assert args.qpos_scale == 1.0
 
 
 def test_realtime_contact_refinement_cli_defaults_are_opt_in(monkeypatch):

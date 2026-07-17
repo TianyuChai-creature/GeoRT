@@ -7,13 +7,17 @@ import queue
 import threading
 import time
 from collections.abc import Iterable
+from pathlib import Path
 
 import numpy as np
 import sapien
 
 from geort import get_config, load_model
+from geort.export import resolve_checkpoint_dir
 from geort.env.hand import HandKinematicModel
 from geort.mocap.hts_right_mocap import EXPECTED_HTS_LANDMARKS, iter_hts_points
+from geort.mocap.realtime_provenance import verify_archived_checkpoint
+from geort.mocap.realtime_runtime import RealtimeSafetyController, SessionRecorder, scale_and_clamp_qpos as _scale_and_clamp
 from geort.utils.config_utils import parse_config_keypoint_info
 
 
@@ -85,16 +89,40 @@ def smooth_live_points(points: np.ndarray, previous: np.ndarray | None, alpha: f
 
 
 def scale_and_clamp_qpos(qpos: np.ndarray, hand, qpos_scale: float) -> np.ndarray:
-    """Scale realtime qpos targets and keep them inside URDF joint limits."""
-    qpos_array = np.asarray(qpos, dtype=np.float32)
-    if qpos_scale == 1.0:
-        return qpos_array
+    """Scale realtime qpos targets and always keep them inside URDF joint limits."""
     lower, upper = hand.get_joint_limit()
-    return np.clip(
-        qpos_array * float(qpos_scale),
-        np.asarray(lower, dtype=np.float32),
-        np.asarray(upper, dtype=np.float32),
-    ).astype(np.float32)
+    return _scale_and_clamp(qpos, lower, upper, qpos_scale)
+
+
+def map_realtime_frame(model, raw_points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Map one already converted Quest frame through the evaluation model API."""
+    points = validate_live_points(raw_points)
+    if points is None:
+        raise ValueError("realtime frame is not a finite GeoRT [21, 3] landmark array")
+    return points, model.forward(points)
+
+
+def _record_frame(recorder, model, *, timestamp_s, raw_points, mapped, output):
+    """Record diagnostics exported by the same model API used by evaluation."""
+    if recorder is None:
+        return
+    normalized = getattr(model, "last_normalized_tips", None)
+    mapped_qpos = getattr(model, "last_mapped_qpos", mapped)
+    refined_qpos = getattr(model, "last_refined_qpos", mapped)
+    timings = dict(getattr(model, "last_timings_ms", {}))
+    contact_result = getattr(model, "last_contact_refinement", None)
+    selection = None if contact_result is None else contact_result.selection
+    contact = {} if contact_result is None else {
+        "pair": None if selection is None else selection.pair_name,
+        "probabilities": np.asarray(contact_result.probabilities, dtype=np.float32).tolist(),
+        "weight": 0.0 if selection is None else float(selection.weight),
+        "ignored_pairs": [] if selection is None else list(selection.ignored_pair_names),
+    }
+    recorder.append(
+        timestamp_s=timestamp_s, raw_points=raw_points, normalized_tips=normalized,
+        mapped_qpos=mapped_qpos, refined_qpos=refined_qpos, output_qpos=output,
+        timings_ms=timings, contact=contact,
+    )
 
 
 class TipContactVisualizer:
@@ -201,6 +229,9 @@ def run_realtime_viewer_loop(
     fps_interval: int = 60,
     contact_visualizer: TipContactVisualizer | None = None,
     qpos_scale: float = 1.0,
+    safety_controller: RealtimeSafetyController | None = None,
+    session_recorder: SessionRecorder | None = None,
+    estop_key: str = "space",
 ) -> int:
     """Refresh the viewer continuously and consume the newest available HTS frame."""
     processed = 0
@@ -210,9 +241,16 @@ def run_realtime_viewer_loop(
     while True:
         if viewer_env.update() is False:
             return processed
+        window = getattr(getattr(viewer_env, "viewer", None), "window", None)
+        if safety_controller is not None and window is not None and hasattr(window, "key_down"):
+            if window.key_down(estop_key):
+                safety_controller.set_estop(True)
+                hand.set_qpos_target(safety_controller.last_qpos)
 
         raw_points = point_buffer.get_latest()
         if raw_points is None:
+            if safety_controller is not None:
+                hand.set_qpos_target(safety_controller.watchdog(now_s=time.monotonic()))
             continue
 
         points = validate_live_points(raw_points)
@@ -222,9 +260,12 @@ def run_realtime_viewer_loop(
         points = smooth_live_points(points, last_points, smoothing_alpha)
         last_points = points
 
-        qpos = model.forward(points)
-        qpos = scale_and_clamp_qpos(qpos, hand, qpos_scale)
+        _, mapped_qpos = map_realtime_frame(model, points)
+        qpos = scale_and_clamp_qpos(mapped_qpos, hand, qpos_scale)
+        if safety_controller is not None:
+            qpos = safety_controller.accept(qpos, now_s=time.monotonic())
         hand.set_qpos_target(qpos)
+        _record_frame(session_recorder, model, timestamp_s=time.time(), raw_points=points, mapped=mapped_qpos, output=qpos)
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
         processed += 1
@@ -249,6 +290,8 @@ def run_realtime_inference(
     fps_interval: int = 60,
     contact_visualizer: TipContactVisualizer | None = None,
     qpos_scale: float = 1.0,
+    safety_controller: RealtimeSafetyController | None = None,
+    session_recorder: SessionRecorder | None = None,
 ) -> int:
     """Drive ``hand`` from a finite stream of GeoRT-ready points. Used by tests."""
     processed = 0
@@ -267,9 +310,12 @@ def run_realtime_inference(
         points = smooth_live_points(points, last_points, smoothing_alpha)
         last_points = points
 
-        qpos = model.forward(points)
-        qpos = scale_and_clamp_qpos(qpos, hand, qpos_scale)
+        _, mapped_qpos = map_realtime_frame(model, points)
+        qpos = scale_and_clamp_qpos(mapped_qpos, hand, qpos_scale)
+        if safety_controller is not None:
+            qpos = safety_controller.accept(qpos, now_s=time.monotonic())
         hand.set_qpos_target(qpos)
+        _record_frame(session_recorder, model, timestamp_s=time.time(), raw_points=points, mapped=mapped_qpos, output=qpos)
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
         processed += 1
@@ -303,7 +349,18 @@ def infer_hand_side(hand: str, hand_side: str) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-hand", "--hand", default="custom_right", help="GeoRT hand config name.")
-    parser.add_argument("-ckpt_tag", "--ckpt_tag", default="custom_right_last", help="GeoRT checkpoint tag.")
+    parser.add_argument(
+        "--checkpoint", "-ckpt_tag", "--ckpt_tag", dest="checkpoint",
+        default="checkpoint/custom_right_2026-07-16_22-04-19_c2_s42",
+        help="Final-matrix registered checkpoint directory (default: C2 seed 42).",
+    )
+    parser.add_argument("--archive-root", default="outputs/final_matrix", help="Final-matrix provenance archive.")
+    parser.add_argument("--session-root", default="outputs/realtime_sessions", help="Directory for one auditable session per run.")
+    parser.add_argument("--stage", choices=("1", "2", "3"), default="1", help="1=SAPIEN mirror, 2=robot contact off, 3=robot contact on.")
+    parser.add_argument("--watchdog-ms", type=float, default=200.0, help="Freeze after this much input silence.")
+    parser.add_argument("--ramp-frames", type=int, default=100, help="Frames used after startup/watchdog recovery.")
+    parser.add_argument("--max-joint-step", type=float, default=0.05, help="Per-joint qpos limit in rad/frame.")
+    parser.add_argument("--estop-key", default="space", help="SAPIEN viewer key that latches immediate emergency stop.")
     parser.add_argument(
         "--hand-side",
         choices=("auto", "left", "right"),
@@ -348,8 +405,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--qpos-scale",
         type=float,
-        default=1.05,
-        help="Scale realtime qpos targets before clamping to URDF joint limits.",
+        default=1.0,
+        help="Scale realtime qpos targets before always clamping to URDF joint limits.",
     )
     parser.add_argument(
         "--contact_refine", "--contact-refine",
@@ -384,9 +441,24 @@ def main() -> None:
         raise ValueError("--contact-refine-steps must be positive")
     hand_side = infer_hand_side(args.hand, args.hand_side)
 
-    print(f"[HTSRealtime] Loading checkpoint tag={args.ckpt_tag} epoch={args.epoch}")
+    if args.stage == "2" and args.contact_refine != "off":
+        raise ValueError("Stage 2 requires --contact_refine off")
+    if args.stage == "3" and args.contact_refine != "on":
+        raise ValueError("Stage 3 requires --contact_refine on")
+    if args.stage in {"2", "3"}:
+        raise RuntimeError("未产出+原因: repository has no real-robot actuator adapter; Stage 2/3 are intentionally blocked")
+    if args.watchdog_ms <= 0.0 or args.ramp_frames <= 0 or args.max_joint_step <= 0.0:
+        raise ValueError("watchdog, ramp and max joint step must be positive")
+    checkpoint = resolve_checkpoint_dir(args.checkpoint)
+    provenance = verify_archived_checkpoint(checkpoint, args.archive_root, repo_root=Path.cwd())
+    print(
+        "[HTSRealtime] checkpoint="
+        f"{checkpoint} sha256={provenance.last_pth_sha256} motion_frame={provenance.motion_frame} "
+        f"anchor: {provenance.anchor.get('count', 0)} pairs from {provenance.anchor.get('path', '')}"
+    )
+    print(f"[HTSRealtime] Loading checkpoint={checkpoint} epoch={args.epoch}")
     model = load_model(
-        args.ckpt_tag, epoch=args.epoch,
+        str(checkpoint), epoch=args.epoch,
         contact_refine=args.contact_refine, contact_model_path=args.contact_model_path,
         contact_p_lo=args.contact_p_lo, contact_p_hi=args.contact_p_hi,
         contact_target_dist=args.contact_target_dist, contact_lambda=args.contact_lambda,
@@ -401,6 +473,12 @@ def main() -> None:
 
     config = get_config(args.hand)
     hand = HandKinematicModel.build_from_config(config, render=True)
+    lower, upper = hand.get_joint_limit()
+    safety_controller = RealtimeSafetyController(
+        lower=lower, upper=upper, initial_qpos=(np.asarray(lower) + np.asarray(upper)) / 2.0,
+        ramp_frames=args.ramp_frames, max_joint_step=args.max_joint_step, watchdog_s=args.watchdog_ms / 1000.0,
+    )
+    session_recorder = SessionRecorder(args.session_root)
     viewer_env = hand.get_viewer_env()
     contact_visualizer = None
     if args.contact_visual:
@@ -437,11 +515,21 @@ def main() -> None:
             fps_interval=args.fps_interval,
             contact_visualizer=contact_visualizer,
             qpos_scale=args.qpos_scale,
+            safety_controller=safety_controller,
+            session_recorder=session_recorder,
+            estop_key=args.estop_key,
         )
     except KeyboardInterrupt:
-        print("\n[HTSRealtime] Stopped by user.")
+        safety_controller.set_estop(True)
+        print("\n[HTSRealtime] Stopped by user; emergency stop latched.")
     else:
         print(f"[HTSRealtime] Stopped after {processed} processed frames.")
+    finally:
+        session_path = session_recorder.close(
+            counters=safety_controller.counters,
+            extra_summary={"checkpoint": str(checkpoint), "stage": args.stage, "motion_frame": provenance.motion_frame},
+        )
+        print(f"[HTSRealtime] session={session_path}")
 
 
 if __name__ == "__main__":
