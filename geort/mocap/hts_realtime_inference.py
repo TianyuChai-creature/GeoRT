@@ -67,10 +67,11 @@ def _runtime_command() -> str:
 
 
 class LatestPointBuffer:
-    """Thread-safe single-slot buffer that keeps only the newest timestamped HTS frame."""
+    """Thread-safe latest-frame buffer, with ordered mode reserved for recorded replay."""
 
-    def __init__(self):
-        self._queue = queue.Queue(maxsize=1)
+    def __init__(self, *, preserve_order: bool = False):
+        self.preserve_order = bool(preserve_order)
+        self._queue = queue.Queue() if self.preserve_order else queue.Queue(maxsize=1)
 
     @staticmethod
     def _coerce(
@@ -101,7 +102,7 @@ class LatestPointBuffer:
         sender_ts_ns: int | None = None,
     ) -> None:
         frame = self._coerce(points, recv_ts_s=recv_ts_s, sender_ts_ns=sender_ts_ns)
-        if self._queue.full():
+        if not self.preserve_order and self._queue.full():
             try:
                 self._queue.get_nowait()
             except queue.Empty:
@@ -109,6 +110,11 @@ class LatestPointBuffer:
         self._queue.put_nowait(frame)
 
     def get_latest(self) -> ReceivedPoints | None:
+        if self.preserve_order:
+            try:
+                return self._queue.get_nowait()
+            except queue.Empty:
+                return None
         latest = None
         while True:
             try:
@@ -647,7 +653,7 @@ def main() -> None:
             report_interval=args.contact_report_interval,
         )
 
-    point_buffer = LatestPointBuffer()
+    point_buffer = LatestPointBuffer(preserve_order=bool(args.replay_session))
     if args.replay_session:
         points_iter = iter_recorded_replay(args.replay_session)
         receiver_name = "recorded-replay"

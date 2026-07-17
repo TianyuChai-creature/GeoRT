@@ -241,3 +241,17 @@ def test_recorded_replay_preserves_frame_order_and_receive_intervals(monkeypatch
     np.testing.assert_allclose(replayed[0], 0.0)
     np.testing.assert_allclose(replayed[1], 1.0)
     np.testing.assert_allclose(sleeps, [0.025])
+
+
+def test_replay_buffer_preserves_every_recorded_frame(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+    buffer = realtime.LatestPointBuffer(preserve_order=True)
+    first = np.zeros((21, 3), dtype=np.float32)
+    second = np.ones((21, 3), dtype=np.float32)
+
+    buffer.put(first, recv_ts_s=1.0)
+    buffer.put(second, recv_ts_s=2.0)
+
+    assert buffer.get_latest().recv_ts_s == 1.0
+    assert buffer.get_latest().recv_ts_s == 2.0
+    assert buffer.get_latest() is None
