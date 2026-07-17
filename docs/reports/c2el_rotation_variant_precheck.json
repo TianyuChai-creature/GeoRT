@@ -1,0 +1,132 @@
+{
+  "added_fields": [
+    "link_rotation"
+  ],
+  "base": "data/custom_right.npz",
+  "base_fields": [
+    "keypoint",
+    "qpos"
+  ],
+  "base_sha256": "b978674ddec119cd0006b2ba6fb5559962317d8fe5c61be68830f0f2563208bc",
+  "removed_fields": [],
+  "rotation_only_addition": true,
+  "shared_fields": {
+    "keypoint": {
+      "array_equal": true,
+      "base_dtype": "object",
+      "base_shape": [],
+      "children": {
+        "F1-R-DIP": {
+          "array_equal": true,
+          "base_dtype": "float32",
+          "base_shape": [
+            100000,
+            3
+          ],
+          "max_abs_diff": 0.0,
+          "variant_dtype": "float32",
+          "variant_shape": [
+            100000,
+            3
+          ]
+        },
+        "F2-R-DIP": {
+          "array_equal": true,
+          "base_dtype": "float32",
+          "base_shape": [
+            100000,
+            3
+          ],
+          "max_abs_diff": 0.0,
+          "variant_dtype": "float32",
+          "variant_shape": [
+            100000,
+            3
+          ]
+        },
+        "F3-R-DIP": {
+          "array_equal": true,
+          "base_dtype": "float32",
+          "base_shape": [
+            100000,
+            3
+          ],
+          "max_abs_diff": 0.0,
+          "variant_dtype": "float32",
+          "variant_shape": [
+            100000,
+            3
+          ]
+        },
+        "F4-R-DIP": {
+          "array_equal": true,
+          "base_dtype": "float32",
+          "base_shape": [
+            100000,
+            3
+          ],
+          "max_abs_diff": 0.0,
+          "variant_dtype": "float32",
+          "variant_shape": [
+            100000,
+            3
+          ]
+        },
+        "F5-R-DIP": {
+          "array_equal": true,
+          "base_dtype": "float32",
+          "base_shape": [
+            100000,
+            3
+          ],
+          "max_abs_diff": 0.0,
+          "variant_dtype": "float32",
+          "variant_shape": [
+            100000,
+            3
+          ]
+        }
+      },
+      "max_abs_diff": 0.0,
+      "object_dict_keys_base": [
+        "F1-R-DIP",
+        "F2-R-DIP",
+        "F3-R-DIP",
+        "F4-R-DIP",
+        "F5-R-DIP"
+      ],
+      "object_dict_keys_variant": [
+        "F1-R-DIP",
+        "F2-R-DIP",
+        "F3-R-DIP",
+        "F4-R-DIP",
+        "F5-R-DIP"
+      ],
+      "variant_dtype": "object",
+      "variant_shape": []
+    },
+    "qpos": {
+      "array_equal": true,
+      "base_dtype": "float64",
+      "base_shape": [
+        100000,
+        20
+      ],
+      "max_abs_diff": 0.0,
+      "variant_dtype": "float64",
+      "variant_shape": [
+        100000,
+        20
+      ]
+    }
+  },
+  "shared_fields_equivalent": true,
+  "shared_max_abs_diff": 0.0,
+  "variant": "data/custom_right_with_rot.npz",
+  "variant_fields": [
+    "keypoint",
+    "link_rotation",
+    "qpos"
+  ],
+  "variant_sha256": "64eef596f901af267022c19f885a51132f6b3ab326f5612d584c0fe61e328239"
+}
