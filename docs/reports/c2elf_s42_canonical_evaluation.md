@@ -1,0 +1,273 @@
+# Canonical Evaluation
+
+## Definitions
+
+- D1: `RandomState(42)` without replacement, 1000 frames.
+- GMC: global normalized-tip motion cosine.
+- unified local-T LMC: `geort.motion_frames.build_human_motion_frames` plus nearest target rotation in normalized robot-tip space.
+- Open-degree: mean five-TIP distance to hand-base origin, fixed edges `[0.074412, 0.170439]`.
+- Cloud contraction: 10,000 random normalized-space point pairs per finger; PCA: mapped/human third singular value.
+
+## Results
+
+```json
+{
+  "anchor_bundle": {
+    "path": "data/anchors_custom_right_arc_bending_v3_pc1beta1_lateral085_ringmono_frozenrobot.npz",
+    "sha256": "3bf9a190cac67cd54a6dd270adc769da01fd621218fab19c51947640bb0ca6ba"
+  },
+  "anchor_tip_residual_m": {
+    "count": 750,
+    "max": 0.08153586834669113,
+    "mean": 0.026224598288536072,
+    "per_finger": [
+      {
+        "count": 150,
+        "finger": "thumb",
+        "max_m": 0.08153586834669113,
+        "mean_m": 0.031103508546948433
+      },
+      {
+        "count": 150,
+        "finger": "index",
+        "max_m": 0.05967826023697853,
+        "mean_m": 0.024245571345090866
+      },
+      {
+        "count": 150,
+        "finger": "middle",
+        "max_m": 0.048926159739494324,
+        "mean_m": 0.018402820453047752
+      },
+      {
+        "count": 150,
+        "finger": "ring",
+        "max_m": 0.0724494531750679,
+        "mean_m": 0.028018740937113762
+      },
+      {
+        "count": 150,
+        "finger": "pinky",
+        "max_m": 0.07281595468521118,
+        "mean_m": 0.0293523371219635
+      }
+    ]
+  },
+  "checkpoint": {
+    "git_hash": "b414717",
+    "last_pth_sha256": "6ad8a4f273486ceb20c5159a80bf964bd053219c782f52bd9a958b2d24be60f3",
+    "path": "checkpoint/custom_right_2026-07-17_19-45-02_C2eLf_s42"
+  },
+  "cloud_shape": [
+    {
+      "contraction_ratio_p50": 0.9645766615867615,
+      "finger": "thumb",
+      "pca_sigma3_ratio_mapped_over_human": 0.9782100319862366
+    },
+    {
+      "contraction_ratio_p50": 0.9624020457267761,
+      "finger": "index",
+      "pca_sigma3_ratio_mapped_over_human": 0.9740840196609497
+    },
+    {
+      "contraction_ratio_p50": 0.9844037890434265,
+      "finger": "middle",
+      "pca_sigma3_ratio_mapped_over_human": 1.4480993747711182
+    },
+    {
+      "contraction_ratio_p50": 0.97711181640625,
+      "finger": "ring",
+      "pca_sigma3_ratio_mapped_over_human": 1.5223934650421143
+    },
+    {
+      "contraction_ratio_p50": 0.9245497584342957,
+      "finger": "pinky",
+      "pca_sigma3_ratio_mapped_over_human": 0.9085603356361389
+    }
+  ],
+  "d1_tip_error_m": {
+    "mean": 0.032953936606645584,
+    "per_finger": [
+      0.03583306074142456,
+      0.02723982185125351,
+      0.030235785990953445,
+      0.03481749817728996,
+      0.03664351627230644
+    ]
+  },
+  "gmc": {
+    "overall": 0.7954639125400532,
+    "per_finger": [
+      0.9313939918919623,
+      0.838343034117684,
+      0.8188281754018726,
+      0.8139317891685417,
+      0.5748225721202055
+    ]
+  },
+  "open_degree_bins": [
+    {
+      "bin": 1,
+      "count": 12676,
+      "lower": 0.074412,
+      "tip_error_m_per_finger": [
+        0.03577718138694763,
+        0.01959952898323536,
+        0.030776986852288246,
+        0.033460721373558044,
+        0.018962671980261803
+      ],
+      "upper": 0.08401470000000001
+    },
+    {
+      "bin": 2,
+      "count": 6792,
+      "lower": 0.08401470000000001,
+      "tip_error_m_per_finger": [
+        0.03522711247205734,
+        0.0231966320425272,
+        0.03106612153351307,
+        0.03302470222115517,
+        0.019208403304219246
+      ],
+      "upper": 0.0936174
+    },
+    {
+      "bin": 3,
+      "count": 8412,
+      "lower": 0.0936174,
+      "tip_error_m_per_finger": [
+        0.034316759556531906,
+        0.02491811476647854,
+        0.032213080674409866,
+        0.034071821719408035,
+        0.02133815549314022
+      ],
+      "upper": 0.10322010000000001
+    },
+    {
+      "bin": 4,
+      "count": 7036,
+      "lower": 0.10322010000000001,
+      "tip_error_m_per_finger": [
+        0.03280729800462723,
+        0.025817330926656723,
+        0.03382818028330803,
+        0.03376542404294014,
+        0.025038838386535645
+      ],
+      "upper": 0.1128228
+    },
+    {
+      "bin": 5,
+      "count": 11334,
+      "lower": 0.1128228,
+      "tip_error_m_per_finger": [
+        0.0328601598739624,
+        0.027277469635009766,
+        0.033026322722435,
+        0.03439735993742943,
+        0.028417160734534264
+      ],
+      "upper": 0.1224255
+    },
+    {
+      "bin": 6,
+      "count": 12728,
+      "lower": 0.1224255,
+      "tip_error_m_per_finger": [
+        0.034513652324676514,
+        0.028170285746455193,
+        0.03349557891488075,
+        0.03384080529212952,
+        0.030264411121606827
+      ],
+      "upper": 0.1320282
+    },
+    {
+      "bin": 7,
+      "count": 17904,
+      "lower": 0.1320282,
+      "tip_error_m_per_finger": [
+        0.034680962562561035,
+        0.028158113360404968,
+        0.03303761035203934,
+        0.031936563551425934,
+        0.03505852818489075
+      ],
+      "upper": 0.1416309
+    },
+    {
+      "bin": 8,
+      "count": 34296,
+      "lower": 0.1416309,
+      "tip_error_m_per_finger": [
+        0.03647684305906296,
+        0.027945848181843758,
+        0.032976116985082626,
+        0.030873136594891548,
+        0.03861597552895546
+      ],
+      "upper": 0.15123360000000002
+    },
+    {
+      "bin": 9,
+      "count": 68138,
+      "lower": 0.15123360000000002,
+      "tip_error_m_per_finger": [
+        0.036922283470630646,
+        0.02719985693693161,
+        0.03025117889046669,
+        0.030203869566321373,
+        0.038727425038814545
+      ],
+      "upper": 0.16083630000000002
+    },
+    {
+      "bin": 10,
+      "count": 54798,
+      "lower": 0.16083630000000002,
+      "tip_error_m_per_finger": [
+        0.035755593329668045,
+        0.03009454905986786,
+        0.026711462065577507,
+        0.04498658701777458,
+        0.04678499326109886
+      ],
+      "upper": 0.170439
+    }
+  ],
+  "protocol": {
+    "cloud_rows": 50000,
+    "d1_frames": 1000,
+    "open_bucket_edges": [
+      0.074412,
+      0.08401470000000001,
+      0.0936174,
+      0.10322010000000001,
+      0.1128228,
+      0.1224255,
+      0.1320282,
+      0.1416309,
+      0.15123360000000002,
+      0.16083630000000002,
+      0.170439
+    ],
+    "random_state": 42,
+    "units": {
+      "gmc_lmc": "0_to_1",
+      "tip_error": "m"
+    }
+  },
+  "unified_local_t_lmc": {
+    "overall": 0.6468082589679919,
+    "per_finger": [
+      0.8241993457899102,
+      0.6092101345554621,
+      0.4450452274011939,
+      0.6915291744045946,
+      0.6640574126887987
+    ]
+  }
+}
+```
