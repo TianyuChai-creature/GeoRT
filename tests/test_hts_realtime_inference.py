@@ -265,3 +265,34 @@ def test_viewer_loop_stops_at_explicit_max_duration(monkeypatch):
         max_duration_s=0.0, fps_interval=0,
     )
     assert processed == 0
+
+
+def test_viewer_loop_can_process_inputs_without_per_frame_render(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    class CountingViewer:
+        def __init__(self):
+            self.update_calls = 0
+
+        def update(self):
+            self.update_calls += 1
+            return True
+
+    buffer = realtime.LatestPointBuffer(preserve_order=True)
+    for _ in range(3):
+        buffer.put(np.zeros((21, 3), dtype=np.float32))
+    viewer = CountingViewer()
+
+    processed = realtime.run_realtime_viewer_loop(
+        model=FakeModel(), hand=FakeHand(), viewer_env=viewer, point_buffer=buffer,
+        max_frames=3, fps_interval=0, render_hz=0.0,
+    )
+
+    assert processed == 3
+    assert viewer.update_calls == 0
+
+
+def test_realtime_render_hz_defaults_to_thirty(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    assert realtime.build_arg_parser().parse_args([]).render_hz == 30.0

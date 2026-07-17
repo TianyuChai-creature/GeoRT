@@ -340,30 +340,44 @@ def run_realtime_viewer_loop(
     estop_key: str = "space",
     freeze_key: str = "f",
     diagnostic_rate_limit_bypass: bool = False,
+    render_hz: float = 30.0,
 ) -> int:
-    """Run realtime mapping and persist receive→render timestamps for each accepted frame."""
+    """Map every accepted input while rendering only at the requested cadence."""
+    if render_hz < 0.0:
+        raise ValueError("render_hz must be non-negative")
     processed = 0
     last_points = None
     start_time = time.monotonic()
+    render_period_s = float("inf") if render_hz == 0.0 else 1.0 / float(render_hz)
+    next_render_s = start_time
     freeze_was_down = False
-    pending_record = None
+    pending_records = []
 
-    def render_and_flush() -> bool:
-        nonlocal pending_record
-        if viewer_env.update() is False:
-            return False
-        rendered_s = time.monotonic()
-        if pending_record is not None:
+    def flush_render(*, force: bool = False) -> bool:
+        nonlocal next_render_s
+        now_s = time.monotonic()
+        if not force and (render_hz == 0.0 or now_s < next_render_s):
+            return True
+        if render_hz > 0.0:
+            if viewer_env.update() is False:
+                return False
+            rendered_s = time.monotonic()
+            next_render_s = rendered_s + render_period_s
+        else:
+            rendered_s = now_s
+        for pending_record in pending_records:
             pending_record["timepoints_s"]["t_render"] = rendered_s
             _record_frame(session_recorder, model, **pending_record)
-            pending_record = None
+        pending_records.clear()
         return True
+
+    def finish() -> int:
+        flush_render(force=True)
+        return processed
 
     while True:
         if max_duration_s is not None and time.monotonic() - start_time >= max_duration_s:
-            return processed
-        if not render_and_flush():
-            return processed
+            return finish()
         window = getattr(getattr(viewer_env, "viewer", None), "window", None)
         freeze_requested = False
         if window is not None and hasattr(window, "key_down"):
@@ -378,12 +392,16 @@ def run_realtime_viewer_loop(
         if received is None:
             if safety_controller is not None:
                 hand.set_qpos_target(safety_controller.watchdog(now_s=time.monotonic()))
+            if not flush_render():
+                return processed
             continue
 
         t_start = time.monotonic()
         raw_points = received.points
         points = validate_live_points(raw_points)
         if points is None:
+            if not flush_render():
+                return processed
             continue
         points = smooth_live_points(points, last_points, smoothing_alpha)
         last_points = points
@@ -409,19 +427,19 @@ def run_realtime_viewer_loop(
             print(f"[HTSRealtime] frozen_frame={len(session_recorder._frozen_frames)}")
         if contact_visualizer is not None:
             contact_visualizer.update(qpos, frame_id=processed + 1)
-        pending_record = {
+        pending_records.append({
             "timestamp_s": timestamp_s, "raw_points": points, "mapped": mapped_qpos, "output": qpos,
             "timepoints_s": {"t_recv": received.recv_ts_s, "t_start": t_start, "t_map": t_map, "t_out": t_out},
             "sender_ts_ns": received.sender_ts_ns,
-        }
+        })
         processed += 1
         if fps_interval > 0 and processed % fps_interval == 0:
             elapsed = max(time.monotonic() - start_time, 1e-6)
             print(f"[HTSRealtime] processed={processed} fps={processed / elapsed:.1f}")
         if max_frames is not None and processed >= max_frames:
-            render_and_flush()
+            return finish()
+        if not flush_render():
             return processed
-
 
 def run_realtime_inference(
     *,
@@ -514,6 +532,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--archive-root", default="outputs/final_matrix", help="Final-matrix provenance archive.")
     parser.add_argument("--session-root", default="outputs/realtime_sessions", help="Directory for one auditable session per run.")
     parser.add_argument("--render-mode", choices=("inline", "headless"), default="inline", help="Inline SAPIEN render or Stage-1 diagnostic headless loop.")
+    parser.add_argument("--render-hz", type=float, default=30.0, help="Maximum SAPIEN render cadence; 0 disables drawing for diagnostics.")
     parser.add_argument("--diagnostic-rate-limit-bypass", action="store_true", help="Stage-1-only diagnostic: bypass rate limiting while retaining clamp, ramp, watchdog and estop.")
     parser.add_argument("--stage", choices=("1", "2", "3"), default="1", help="1=SAPIEN mirror, 2=robot contact off, 3=robot contact on.")
     parser.add_argument("--watchdog-ms", type=float, default=200.0, help="Freeze after this much input silence.")
@@ -614,6 +633,8 @@ def main() -> None:
         raise ValueError("max joint speed must be positive when provided")
     if args.max_duration_s is not None and args.max_duration_s < 0.0:
         raise ValueError("max duration must be non-negative when provided")
+    if args.render_hz < 0.0:
+        raise ValueError("--render-hz must be non-negative")
     if args.max_joint_speed is None and not args.diagnostic_rate_limit_bypass:
         raise ValueError("--max-joint-speed is required unless --diagnostic-rate-limit-bypass is set")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)
@@ -622,7 +643,8 @@ def main() -> None:
     print(
         "[HTSRealtime] checkpoint="
         f"{checkpoint} sha256={provenance.last_pth_sha256} motion_frame={provenance.motion_frame} "
-        f"anchor: {provenance.anchor.get('count', 0)} pairs from {provenance.anchor.get('path', '')}"
+        f"anchor: {provenance.anchor.get('count', 0)} pairs from {provenance.anchor.get('path', '')} "
+        f"render_hz={args.render_hz}"
     )
     print(f"[HTSRealtime] Loading checkpoint={checkpoint} epoch={args.epoch}")
     model = load_model(
@@ -696,6 +718,7 @@ def main() -> None:
             estop_key=args.estop_key,
             freeze_key=args.freeze_key,
             diagnostic_rate_limit_bypass=args.diagnostic_rate_limit_bypass,
+            render_hz=args.render_hz,
         )
     except KeyboardInterrupt:
         safety_controller.set_estop(True)
@@ -714,6 +737,7 @@ def main() -> None:
                 "stage": args.stage,
                 "motion_frame": provenance.motion_frame,
                 "render_mode": args.render_mode,
+                "render_hz": args.render_hz,
                 "diagnostic_rate_limit_bypass": args.diagnostic_rate_limit_bypass,
                 "ramp_frames": args.ramp_frames,
                 "max_joint_speed_rad_s": args.max_joint_speed,
