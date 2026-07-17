@@ -330,6 +330,17 @@ def run_realtime_inference(
     return processed
 
 
+def validate_stage_contact_mode(stage: str, contact_refine: str) -> str:
+    """Fix contact mode for the SAPIEN-as-actuator rollout stages."""
+    required = {"1": "off", "2": "off", "3": "on"}
+    if stage not in required:
+        raise ValueError(f"Unknown realtime stage: {stage!r}")
+    expected = required[stage]
+    if contact_refine != expected:
+        raise ValueError(f"Stage {stage} requires --contact_refine {expected}")
+    return expected
+
+
 def infer_hand_side(hand: str, hand_side: str) -> str:
     """Resolve realtime HTS hand side from CLI input."""
     side = hand_side.lower()
@@ -441,12 +452,7 @@ def main() -> None:
         raise ValueError("--contact-refine-steps must be positive")
     hand_side = infer_hand_side(args.hand, args.hand_side)
 
-    if args.stage == "2" and args.contact_refine != "off":
-        raise ValueError("Stage 2 requires --contact_refine off")
-    if args.stage == "3" and args.contact_refine != "on":
-        raise ValueError("Stage 3 requires --contact_refine on")
-    if args.stage in {"2", "3"}:
-        raise RuntimeError("未产出+原因: repository has no real-robot actuator adapter; Stage 2/3 are intentionally blocked")
+    validate_stage_contact_mode(args.stage, args.contact_refine)
     if args.watchdog_ms <= 0.0 or args.ramp_frames <= 0 or args.max_joint_step <= 0.0:
         raise ValueError("watchdog, ramp and max joint step must be positive")
     checkpoint = resolve_checkpoint_dir(args.checkpoint)

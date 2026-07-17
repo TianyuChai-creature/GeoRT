@@ -12,6 +12,9 @@ def load_realtime_module(monkeypatch):
     geort_stub.get_config = lambda *_args, **_kwargs: {}
     geort_stub.load_model = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "geort", geort_stub)
+    export_stub = types.ModuleType("geort.export")
+    export_stub.resolve_checkpoint_dir = lambda value: value
+    monkeypatch.setitem(sys.modules, "geort.export", export_stub)
 
     env_stub = types.ModuleType("geort.env")
     hand_stub = types.ModuleType("geort.env.hand")
@@ -125,3 +128,12 @@ def test_realtime_contact_refinement_cli_forwards_explicit_values(monkeypatch):
     assert args.contact_target_dist == 0.003
     assert args.contact_lambda == 0.2
     assert args.contact_refine_steps == 24
+
+
+
+def test_stage_two_and_three_use_sapien_with_fixed_contact_mode(monkeypatch):
+    realtime = load_realtime_module(monkeypatch)
+
+    assert realtime.validate_stage_contact_mode("1", "off") == "off"
+    assert realtime.validate_stage_contact_mode("2", "off") == "off"
+    assert realtime.validate_stage_contact_mode("3", "on") == "on"
