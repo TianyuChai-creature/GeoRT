@@ -112,4 +112,45 @@ bypass session（含 `20260717T075120Z`）关键读数 `mapped` 超限位 p95 `0
 - `checkpoint/custom_right_2026-07-18_13-37-32_seed42_null/`
 - `checkpoint/custom_right_2026-07-18_13-37-32_seed123_null/`
 
-四目录的 `training_metadata.json` 记录 tag 与 `nullspace_weight`（syn0 为 `0.0`；null 为 `0.01`），但 `launch_command`、`run_git_commit` 与 seed 均为 `null`。全仓测试搜索没有这四个 tag 或相应 checkpoint 创建调用，未找到其为 pytest 副产物的证据。四目录保持待裁，本轮不动。
+四目录的 `training_metadata.json` 记录 tag 与 `nullspace_weight`（syn0 为 `0.0`；null 为 `0.01`），但 `launch_command`、`run_git_commit` 与 seed 均为 `null`。其来源由下方执行回执中的 `tests/test_deliverables.py:175-211` 顶层训练循环定案；四目录保持待裁，本轮不动。
+
+
+## 执行回执（第二提交）
+
+### 补件 A：逐文件清单
+
+| 目录 | 文件 | 字节 | SHA256 |
+|---|---|---:|---|
+| `C2eLf_s42` | `config.json` | 6,496 | `1fb4983f2910cdc2dadcda9a4a359c7ef0c5b4ce80ad7092e6974f25dee4f5fa` |
+| `C2eLf_s42` | `human_motion_frames.npy` | 42,140,648 | `823618100781362d7f88bc2df10ce753f308367e1ed377147f5df3d5f26ff0ec` |
+| `C2eLf_s42` | `last.pth` | 392,945 | `6ad8a4f273486ceb20c5159a80bf964bd053219c782f52bd9a958b2d24be60f3` |
+| `C2eLf_s42` | `normalization.json` | 2,866 | `c242685a73815c1b29121bdbd65cdc470e5477dd8b3dab07815520a4c41e3e6a` |
+| `C2eLf_s42` | `training_metadata.json` | 4,027 | `f9ae02f74c399f1c83c59e0a821c80291c447ffa9827958aeb38e78de6a5cb3e` |
+| `C2eL_s42` | `config.json` | 6,496 | `1fb4983f2910cdc2dadcda9a4a359c7ef0c5b4ce80ad7092e6974f25dee4f5fa` |
+| `C2eL_s42` | `human_motion_frames.npy` | 42,140,648 | `823618100781362d7f88bc2df10ce753f308367e1ed377147f5df3d5f26ff0ec` |
+| `C2eL_s42` | `last.pth` | 392,945 | `ec1641b642e7855549437aa8ac3bbd330c227329173ade26c64332a70bced59f` |
+| `C2eL_s42` | `normalization.json` | 2,866 | `c242685a73815c1b29121bdbd65cdc470e5477dd8b3dab07815520a4c41e3e6a` |
+| `C2eL_s42` | `training_metadata.json` | 4,023 | `ad24ca420c267ea619f55b261301ad750f14df103422d8114e9f59d4e27b2afd` |
+| `c3_s42` | `config.json` | 6,496 | `1fb4983f2910cdc2dadcda9a4a359c7ef0c5b4ce80ad7092e6974f25dee4f5fa` |
+| `c3_s42` | `human_motion_frames.npy` | 42,140,648 | `823618100781362d7f88bc2df10ce753f308367e1ed377147f5df3d5f26ff0ec` |
+| `c3_s42` | `last.pth` | 392,945 | `f502ebb3702f9c06e7084dfa84b8de9210e59b1b86dc5afa03444be8cc63f981` |
+| `c3_s42` | `normalization.json` | 2,866 | `c242685a73815c1b29121bdbd65cdc470e5477dd8b3dab07815520a4c41e3e6a` |
+| `c3_s42` | `training_metadata.json` | 3,775 | `e73c8644c32d02816a739bcb2045f8256531175c27130cc57a68cfd0bac6ece1` |
+| `c3_s123` | `config.json` | 6,496 | `1fb4983f2910cdc2dadcda9a4a359c7ef0c5b4ce80ad7092e6974f25dee4f5fa` |
+| `c3_s123` | `human_motion_frames.npy` | 42,140,648 | `823618100781362d7f88bc2df10ce753f308367e1ed377147f5df3d5f26ff0ec` |
+| `c3_s123` | `last.pth` | 392,945 | `d910a1071eee0178e8ad6f9b9e734bb71e57d3af240d430a73a4c917af1e5c5f` |
+| `c3_s123` | `normalization.json` | 2,866 | `c242685a73815c1b29121bdbd65cdc470e5477dd8b3dab07815520a4c41e3e6a` |
+| `c3_s123` | `training_metadata.json` | 3,780 | `be62027ffffe7a1701099ebad7ffdc98f85616f78b4fd35391c6e6dc78a95ca9` |
+
+四份 `human_motion_frames.npy` 是相同的 `float32 (234114, 5, 3, 3)` 数组；与 `data/custom_right_with_rot.npz` 的 SHA、体积和文件格式均不同。本轮未删除这四个数组及所在目录的 `last.pth`。
+
+### 补件 B：来源定案
+
+`tests/test_deliverables.py:175-211` 在模块顶层循环 `seed in [42, 123]` 与 `variant in [("syn0", 0.0, 0.0), ("null", 0.01, 0.0)]`，通过 `subprocess.Popen(..., shell=True)` 启动 `GeoRTTrainer.train(..., tag='seed{seed}_{variant}', epoch=200)`。这与四个 `2026-07-18_13-37-32_seed{42,123}_{syn0,null}` 目录的 tag、权重和时间相符；它们是 `tests/test_deliverables.py` 的 pytest 副产物。
+
+### 已执行处置与删后核验
+
+- 已删除批准的三级目录/文件，以及未受补件 A 保护的九个二级 `last.pth`；逻辑文件字节回收量为 `169,024,079 B`。
+- 已复核一级和升一级的 C2b、v3 bundle、两份目标点云、`hts_right.npy`、`hts_left.npy`、`contact_labels_right.npz`、contact MLP、URDF、config 均在位；已知基准 SHA 与清单逐位一致。
+- 已复核补件 A 四目录与补件 B 四目录仍在位。
+- pytest 命令：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/creature/Desktop/GeoRT/.venv/bin/python -m pytest`。结果：收集 `260 items / 1 error`，退出码 `2`；`tests/test_deliverables.py:63` 读取已按本清单删除的 `checkpoint/custom_right_last/last.pth`。该测试还在顶层启动四个后台训练，属于补件 B 所确认的副产物来源；本轮未改测试或恢复 checkpoint。
