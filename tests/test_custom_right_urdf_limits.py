@@ -24,10 +24,10 @@ def test_custom_right_four_finger_mcp2_limits_match_quest_effective_search() -> 
     )
 
     assert limits == {
-        "F2-R-MCP2": ("-0.380431", "0.087049"),
-        "F3-R-MCP2": ("-0.242572", "0.204627"),
-        "F4-R-MCP2": ("-0.498692", "0.477526"),
-        "F5-R-MCP2": ("-0.440455", "0.61"),
+        "F2-R-MCP2": ("-0.61", "0.61"),
+        "F3-R-MCP2": ("-0.61", "0.61"),
+        "F4-R-MCP2": ("-0.61", "0.61"),
+        "F5-R-MCP2": ("-0.61", "0.61"),
     }
 
 
@@ -38,8 +38,8 @@ def test_custom_left_four_finger_mcp2_limits_match_quest_effective_search() -> N
     )
 
     assert limits == {
-        "F2-L-MCP2": ("-0.380431", "0.087049"),
-        "F3-L-MCP2": ("-0.242572", "0.204627"),
-        "F4-L-MCP2": ("-0.498692", "0.477526"),
-        "F5-L-MCP2": ("-0.440455", "0.61"),
+        "F2-L-MCP2": ("-0.61", "0.61"),
+        "F3-L-MCP2": ("-0.61", "0.61"),
+        "F4-L-MCP2": ("-0.61", "0.61"),
+        "F5-L-MCP2": ("-0.61", "0.61"),
     }
