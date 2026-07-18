@@ -1,0 +1,39 @@
+{
+  "fingers": {
+    "index": {
+      "max_m": 5.061804593243149e-08,
+      "mean_m": 2.3928943664601476e-08
+    },
+    "middle": {
+      "max_m": 3.3527612686157227e-08,
+      "mean_m": 1.744857179736808e-08
+    },
+    "pinky": {
+      "max_m": 3.781903629050954e-08,
+      "mean_m": 1.5978210932275213e-08
+    },
+    "ring": {
+      "max_m": 4.856305301479331e-08,
+      "mean_m": 1.6618017478886173e-08
+    },
+    "thumb": {
+      "max_m": 6.376669842237119e-08,
+      "mean_m": 4.2231320908950796e-08
+    }
+  },
+  "gate": {
+    "limit_m": 1e-06,
+    "name": "fk_parity_max",
+    "observed_m": 6.376669842237119e-08,
+    "passed": true
+  },
+  "hand_id": "custom_left",
+  "manifest": "custom_left",
+  "overall": {
+    "max_m": 6.376669842237119e-08,
+    "mean_m": 2.3241012956416347e-08
+  },
+  "parity_qpos": "/home/creature/Desktop/GeoRT/.worktrees/AnyDexRT/outputs/custom_left/parity/parity_qpos.npz",
+  "qpos_rows": 750,
+  "threshold_m": 1e-06
+}

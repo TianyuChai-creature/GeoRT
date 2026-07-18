@@ -1,0 +1,6 @@
+hand_id: custom_left
+urdf: assets/custom_left/URDF_L.urdf
+hts: data/hts_left.npy
+hand_config: custom_left
+side: L
+output_root: outputs/custom_left

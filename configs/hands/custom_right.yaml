@@ -1,0 +1,7 @@
+hand_id: custom_right
+urdf: assets/custom_right/URDF_R.urdf
+hts: data/hts_right.npy
+hand_config: custom_right
+side: R
+output_root: outputs/custom_right
+anchor_bundle: data/anchors_custom_right_arc_bending_v3_pc1beta1_lateral085_ringmono_frozenrobot.npz

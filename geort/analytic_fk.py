@@ -13,24 +13,32 @@ import torch
 import torch.nn as nn
 
 
-# Per-finger joint name blocks in the config joint_order (and URDF order).
-# Order per finger: MCP2 (abduction α), MCP1 (flexion β1), PIP (β2), DIP (β3).
-FINGER_JOINT_BLOCKS: tuple[tuple[str, ...], ...] = (
-    ("F1-R-MCP2", "F1-R-MCP1", "F1-R-PIP", "F1-R-DIP"),
-    ("F2-R-MCP2", "F2-R-MCP1", "F2-R-PIP", "F2-R-DIP"),
-    ("F3-R-MCP2", "F3-R-MCP1", "F3-R-PIP", "F3-R-DIP"),
-    ("F4-R-MCP2", "F4-R-MCP1", "F4-R-PIP", "F4-R-DIP"),
-    ("F5-R-MCP2", "F5-R-MCP1", "F5-R-PIP", "F5-R-DIP"),
-)
+# Per-finger joint role order in config joint_order and URDF chains.
+# The hand-side token is explicit at construction; no URDF-side inference occurs.
+_FINGER_JOINT_ROLES: tuple[str, ...] = ("MCP2", "MCP1", "PIP", "DIP")
 
-# Tip link names matching the finger order above.
-TIP_LINK_NAMES: tuple[str, ...] = (
-    "F1-R-DIP",
-    "F2-R-DIP",
-    "F3-R-DIP",
-    "F4-R-DIP",
-    "F5-R-DIP",
-)
+
+def finger_joint_blocks(side: str) -> tuple[tuple[str, ...], ...]:
+    """Return the explicit ``F{finger}-{side}-{role}`` joint template."""
+    if side not in {"R", "L"}:
+        raise ValueError(f"side must be explicit 'R' or 'L', got {side!r}")
+    return tuple(
+        tuple(f"F{finger}-{side}-{role}" for role in _FINGER_JOINT_ROLES)
+        for finger in range(1, 6)
+    )
+
+
+def tip_link_names(side: str) -> tuple[str, ...]:
+    """Return the explicit distal TIP link template for one hand side."""
+    if side not in {"R", "L"}:
+        raise ValueError(f"side must be explicit 'R' or 'L', got {side!r}")
+    return tuple(f"F{finger}-{side}-DIP" for finger in range(1, 6))
+
+
+# Backward-compatible aliases for legacy right-hand callers. New manifest paths
+# must pass ``side`` explicitly to AnalyticFK.
+FINGER_JOINT_BLOCKS = finger_joint_blocks("R")
+TIP_LINK_NAMES = tip_link_names("R")
 
 
 class AnalyticFK(nn.Module):
@@ -54,6 +62,8 @@ class AnalyticFK(nn.Module):
         joint_lower: Sequence[float],
         joint_upper: Sequence[float],
         tip_offsets: Sequence[Sequence[float]] | None = None,
+        *,
+        side: str = "R",
     ) -> None:
         """
         Args:
@@ -62,26 +72,30 @@ class AnalyticFK(nn.Module):
             joint_upper: Upper joint limits (rad) in config joint_order [20].
             tip_offsets:  Tip centre offsets in the distal link local frame,
                 one [x, y, z] per finger (default: zeros).
+            side: Explicit URDF hand-side token, ``"R"`` or ``"L"``.
+                Legacy callers retain ``"R"``; manifest paths pass it explicitly.
         """
         super().__init__()
         with open(urdf_path) as fh:
             urdf_text = fh.read()
 
         self._chain = pk.build_chain_from_urdf(urdf_text)
-        self._tip_links = list(TIP_LINK_NAMES)
+        self.side = side
+        self._tip_links = list(tip_link_names(side))
+        joint_blocks = finger_joint_blocks(side)
 
         # Flatten the per-finger joint blocks into the 20-DOF ordered list.
         self._joint_names: list[str] = []
         self._per_finger_indices: list[list[int]] = []
         offset = 0
-        for block in FINGER_JOINT_BLOCKS:
+        for block in joint_blocks:
             self._joint_names.extend(block)
             self._per_finger_indices.append(list(range(offset, offset + len(block))))
             offset += len(block)
 
         if len(self._joint_names) != 20:
             raise AssertionError(
-                f"Expected 20 joints from FINGER_JOINT_BLOCKS, got {len(self._joint_names)}"
+                f"Expected 20 joints from explicit side {side!r} template, got {len(self._joint_names)}"
             )
 
         # Verify that the URDF chain contains every joint we expect and that

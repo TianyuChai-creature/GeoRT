@@ -17,7 +17,12 @@ def get_joint_limits(hand_config: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
     return np.asarray(lower, dtype=np.float64), np.asarray(upper, dtype=np.float64)
 
 def make_analytic_tip_callback(
-    hand_config: dict[str, Any], lower: np.ndarray, upper: np.ndarray, tip_offsets: object
+    hand_config: dict[str, Any],
+    lower: np.ndarray,
+    upper: np.ndarray,
+    tip_offsets: object,
+    *,
+    side: str = "R",
 ):
     """Inject current AnalyticFK behind the legacy physical-qpos callback.
 
@@ -28,7 +33,9 @@ def make_analytic_tip_callback(
     """
     from geort.analytic_fk import AnalyticFK
 
-    fk = AnalyticFK(hand_config["urdf_path"], lower, upper, tip_offsets=tip_offsets)
+    fk = AnalyticFK(
+        hand_config["urdf_path"], lower, upper, tip_offsets=tip_offsets, side=side
+    )
     lower = np.asarray(lower, dtype=np.float32)
     upper = np.asarray(upper, dtype=np.float32)
 
