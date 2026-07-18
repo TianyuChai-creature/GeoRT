@@ -36,10 +36,11 @@ def evaluate_analytic_tip_fk(
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Evaluate physical qpos with the training analytic FK and config offsets."""
     from geort.analytic_fk import AnalyticFK
-    from geort.utils.config_utils import parse_config_joint_limit, parse_config_keypoint_info, select_keypoint_types
+    from geort.anchor.compat import get_joint_limits
+    from geort.utils.config_utils import parse_config_keypoint_info, select_keypoint_types
 
     values = np.asarray(qpos, dtype=np.float32)
-    lower, upper = parse_config_joint_limit(config)
+    lower, upper = get_joint_limits(config)
     lower = np.asarray(lower, dtype=np.float32)
     upper = np.asarray(upper, dtype=np.float32)
     if values.ndim != 2 or values.shape[1] != lower.size:

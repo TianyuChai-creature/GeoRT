@@ -224,6 +224,18 @@ def select_keypoint_types(keypoint_info, allowed_types=("tip",)):
 
 
 def parse_config_joint_limit(config):
+    """Read limits from a trainer-exported checkpoint ``config.json`` only.
+
+    Source hand configs do not carry a top-level ``joint`` field; callers for
+    those configs must use ``HandKinematicModel.get_joint_limit()`` (or the
+    injected ``anchor.compat.get_joint_limits`` adapter) instead.
+    """
+    if "joint" not in config:
+        raise ValueError(
+            "parse_config_joint_limit requires a checkpoint export config with "
+            "a top-level 'joint' field; source hand configs must use "
+            "HandKinematicModel.get_joint_limit()"
+        )
     lower_limit = config["joint"]["lower"]
     upper_limit = config["joint"]["upper"]
     return np.array(lower_limit), np.array(upper_limit)
