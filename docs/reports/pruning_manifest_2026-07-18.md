@@ -154,3 +154,19 @@ bypass session（含 `20260717T075120Z`）关键读数 `mapped` 超限位 p95 `0
 - 已复核一级和升一级的 C2b、v3 bundle、两份目标点云、`hts_right.npy`、`hts_left.npy`、`contact_labels_right.npz`、contact MLP、URDF、config 均在位；已知基准 SHA 与清单逐位一致。
 - 已复核补件 A 四目录与补件 B 四目录仍在位。
 - pytest 命令：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/creature/Desktop/GeoRT/.venv/bin/python -m pytest`。结果：收集 `260 items / 1 error`，退出码 `2`；`tests/test_deliverables.py:63` 读取已按本清单删除的 `checkpoint/custom_right_last/last.pth`。该测试还在顶层启动四个后台训练，属于补件 B 所确认的副产物来源；本轮未改测试或恢复 checkpoint。
+
+
+## 第三阶段授权与预核算
+
+### `test_deliverables.py` 处置
+
+退役 `tests/test_deliverables.py`。案底：文件由 `af6b96f` 引入，是无 pytest 断言的交付冒烟脚本；在模块顶层读取已淘汰的 `custom_right_last`/早期 nullspace checkpoint，并启动四个 200 epoch 后台训练。其每次运行先删除同 tag 目录再重建，因此仅保留最近一次（13:37）的四组副产物。测试收集期不得产生训练或 checkpoint 写入。
+
+### 已批准本批删除
+
+- 四个 local-T checkpoint 中的 `human_motion_frames.npy` 与 `last.pth`；保留各自 `config.json`、`normalization.json`、`training_metadata.json`。
+- `checkpoint/custom_right_2026-07-18_13-37-32_seed{42,123}_{syn0,null}/` 四目录。
+- `checkpoint/custom_right_2026-07-16_10-08-30_seed42_null_v3_full/last.pth` 与 `seed123_null_v3_full/last.pth`；保留各自 `config.json`。
+- `tests/test_deliverables.py`。
+
+本批删除前逻辑字节核算：`172,544,647 B`。其中四份 `human_motion_frames.npy` 合计 `168,562,592 B`；四个 13:37 pytest 副产物合计 `1,614,940 B`。与第二阶段 `169,024,079 B` 合计预计逻辑回收 `341,568,726 B`。
