@@ -1,0 +1,110 @@
+....F................................................................... [ 27%]
+........................................................................ [ 55%]
+.................FF..................................................... [ 83%]
+..........................................                               [100%]
+==================================== ERRORS ====================================
+_________ ERROR collecting tests/test_anchor_qa_report_integration.py __________
+ImportError while importing test module '/home/creature/Desktop/GeoRT/.worktrees/AnyDexRT/tests/test_anchor_qa_report_integration.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_anchor_qa_report_integration.py:3: in <module>
+    from geort.anchor.qa_report import QAInputs, build_report_record
+E   ImportError: cannot import name 'QAInputs' from 'geort.anchor.qa_report' (/home/creature/Desktop/GeoRT/.worktrees/AnyDexRT/geort/anchor/qa_report.py)
+____________ ERROR collecting tests/test_anchor_qa_report_static.py ____________
+ImportError while importing test module '/home/creature/Desktop/GeoRT/.worktrees/AnyDexRT/tests/test_anchor_qa_report_static.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_anchor_qa_report_static.py:3: in <module>
+    from geort.anchor.qa_report_static import QAInputs, build_report_record
+E   ModuleNotFoundError: No module named 'geort.anchor.qa_report_static'
+=================================== FAILURES ===================================
+_______________ test_analytic_anchor_fk_uses_config_tip_offsets ________________
+
+    def test_analytic_anchor_fk_uses_config_tip_offsets() -> None:
+        from geort.anchor.generate_robot_anchors import evaluate_analytic_tip_fk
+        from geort.utils.config_utils import get_config, parse_config_joint_limit
+    
+        config = get_config("custom_right")
+>       lower, upper = parse_config_joint_limit(config)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_anchor_analytic_fk.py:11: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+config = {'name': 'custom_right', 'urdf_path': './assets/custom_right/URDF_R.urdf', 'base_link': 'base_link', 'joint_order': ['F1-R-MCP2', 'F1-R-MCP1', 'F1-R-PIP', 'F1-R-DIP', 'F2-R-MCP2', 'F2-R-MCP1', ...], ...}
+
+    def parse_config_joint_limit(config):
+>       lower_limit = config["joint"]["lower"]
+                      ^^^^^^^^^^^^^^^
+E       KeyError: 'joint'
+
+geort/utils/config_utils.py:227: KeyError
+____ test_custom_right_four_finger_mcp2_limits_match_quest_effective_search ____
+
+    def test_custom_right_four_finger_mcp2_limits_match_quest_effective_search() -> None:
+        limits = _joint_limits(
+            Path("assets/custom_right/URDF_R.urdf"),
+            ["F2-R-MCP2", "F3-R-MCP2", "F4-R-MCP2", "F5-R-MCP2"],
+        )
+    
+>       assert limits == {
+            "F2-R-MCP2": ("-0.380431", "0.087049"),
+            "F3-R-MCP2": ("-0.242572", "0.204627"),
+            "F4-R-MCP2": ("-0.498692", "0.477526"),
+            "F5-R-MCP2": ("-0.440455", "0.61"),
+        }
+E       AssertionError: assert {'F2-R-MCP2':....61', '0.61')} == {'F2-R-MCP2':...455', '0.61')}
+E         
+E         Differing items:
+E         {'F2-R-MCP2': ('-0.61', '0.61')} != {'F2-R-MCP2': ('-0.380431', '0.087049')}
+E         {'F3-R-MCP2': ('-0.61', '0.61')} != {'F3-R-MCP2': ('-0.242572', '0.204627')}
+E         {'F5-R-MCP2': ('-0.61', '0.61')} != {'F5-R-MCP2': ('-0.440455', '0.61')}
+E         {'F4-R-MCP2': ('-0.61', '0.61')} != {'F4-R-MCP2': ('-0.498692', '0.477526')}
+E         Use -v to get more diff
+
+tests/test_custom_right_urdf_limits.py:26: AssertionError
+____ test_custom_left_four_finger_mcp2_limits_match_quest_effective_search _____
+
+    def test_custom_left_four_finger_mcp2_limits_match_quest_effective_search() -> None:
+        limits = _joint_limits(
+            Path("assets/custom_left/URDF_L.urdf"),
+            ["F2-L-MCP2", "F3-L-MCP2", "F4-L-MCP2", "F5-L-MCP2"],
+        )
+    
+>       assert limits == {
+            "F2-L-MCP2": ("-0.380431", "0.087049"),
+            "F3-L-MCP2": ("-0.242572", "0.204627"),
+            "F4-L-MCP2": ("-0.498692", "0.477526"),
+            "F5-L-MCP2": ("-0.440455", "0.61"),
+        }
+E       AssertionError: assert {'F2-L-MCP2':....61', '0.61')} == {'F2-L-MCP2':...455', '0.61')}
+E         
+E         Differing items:
+E         {'F2-L-MCP2': ('-0.61', '0.61')} != {'F2-L-MCP2': ('-0.380431', '0.087049')}
+E         {'F4-L-MCP2': ('-0.61', '0.61')} != {'F4-L-MCP2': ('-0.498692', '0.477526')}
+E         {'F3-L-MCP2': ('-0.61', '0.61')} != {'F3-L-MCP2': ('-0.242572', '0.204627')}
+E         {'F5-L-MCP2': ('-0.61', '0.61')} != {'F5-L-MCP2': ('-0.440455', '0.61')}
+E         Use -v to get more diff
+
+tests/test_custom_right_urdf_limits.py:40: AssertionError
+=============================== warnings summary ===============================
+tests/test_analytic_fk.py::test_position_accuracy
+  /home/creature/Desktop/GeoRT/.venv/lib/python3.12/site-packages/_pytest/python.py:171: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_analytic_fk.py::test_position_accuracy returned <class 'numpy.bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_anchor_analytic_fk.py::test_analytic_anchor_fk_uses_config_tip_offsets
+FAILED tests/test_custom_right_urdf_limits.py::test_custom_right_four_finger_mcp2_limits_match_quest_effective_search
+FAILED tests/test_custom_right_urdf_limits.py::test_custom_left_four_finger_mcp2_limits_match_quest_effective_search
+ERROR tests/test_anchor_qa_report_integration.py
+ERROR tests/test_anchor_qa_report_static.py
+3 failed, 255 passed, 1 warning, 2 errors in 48.15s

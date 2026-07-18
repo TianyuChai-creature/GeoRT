@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from geort.anchor.qa_report import QAInputs, build_report_record
+from geort.anchor.qa_report_runner import QAInputs, build_report_record
 
 
 ROOT = Path(__file__).resolve().parents[1]
